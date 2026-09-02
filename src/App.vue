@@ -4,7 +4,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { getVersion } from '@tauri-apps/api/app';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-import { copyFile, writeTextFile, exists, readTextFile, remove } from '@tauri-apps/plugin-fs';
+import { copyFile, exists, readTextFile, remove } from '@tauri-apps/plugin-fs';
 import { open } from '@tauri-apps/plugin-dialog';
 import { htmlToMarkdown, detectLineEnding, applyLineEnding, markdownToHtml } from './utils/markdown-converter';
 import { inlineMarkdownImages, getDirectoryFromFilePath } from './utils/image-resolver';
@@ -55,6 +55,8 @@ import { useTabSerializer } from './composables/useTabSerializer';
 import { useFileOperations } from './composables/useFileOperations';
 import { useCloseConfirmation } from './composables/useCloseConfirmation';
 import { wouldTruncateDocument } from './utils/save-guard';
+import { atomicWriteTextFile } from './utils/atomic-write';
+import { auditShrink } from './utils/save-audit';
 import { ratioFromPointer } from './utils/resize';
 import { useWindowManager } from './composables/useWindowManager';
 import { useTabDrag } from './composables/useTabDrag';
@@ -91,6 +93,7 @@ const {
   activePane,
   isSplitActive,
   toggleSplit,
+  setActivePane,
   createTab,
   closeTab: closeTabFromSplit,
   switchTab,
@@ -524,6 +527,11 @@ const {
   switchToTab,
   getEditorHtml: getEditorContent,
   getMarkdownOverride: getActiveMarkdownOverride,
+  getSaveMarkdown: () => {
+    const tab = getActiveTabForPane(activePaneId.value);
+    return tab ? getTabMarkdown(activePaneId.value, tab) : null;
+  },
+  onSaveFailed: () => showToastNotification(t.value.saveFailed(activeTab.value.fileName), 'warning'),
   setEditorContent,
   markSaveStart: (filePath: string) => markSaveStart(filePath),
   markSaveEnd: (filePath: string, content: string) => markSaveEnd(filePath, content),
@@ -1564,9 +1572,14 @@ const {
   handleDiscard,
   handleCancel,
 } = useCloseConfirmation({
-  tabs,
-  getTabMarkdown: (tab: Tab) => getTabMarkdown(activePaneId.value, tab),
-  switchToTab,
+  // Every pane, not just the focused one: a dirty tab parked in the other half
+  // of a split view is still the user's work.
+  collectUnsavedTabs: () => getAllUnsavedTabs(),
+  getTabMarkdown,
+  switchToTab: async (paneId: string, tabId: string) => {
+    setActivePane(paneId);
+    await switchToTab(tabId);
+  },
   syncActiveTabContent,
   onSaveFailed: (tab: Tab) => showToastNotification(t.value.saveFailed(tab.fileName), 'warning'),
 });
@@ -1601,8 +1614,13 @@ const saveTabFromPane = async (paneId: string, tabId: string) => {
       return;
     }
 
+    // The guard above only catches writes that end up empty. A write that keeps
+    // some text but drops most of it looks identical to a normal edit from here,
+    // so record it rather than block it and leave evidence behind.
+    auditShrink('auto-save', tab.filePath, markdown, tab.originalMarkdown);
+
     markSaveStart(tab.filePath);
-    await writeTextFile(tab.filePath, markdown);
+    await atomicWriteTextFile(tab.filePath, markdown);
     markSaveEnd(tab.filePath, markdown);
 
     // Update tab state. tab.content is left alone: EditorPane keeps it current,

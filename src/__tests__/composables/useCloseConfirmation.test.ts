@@ -1,11 +1,43 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { ref } from 'vue';
 import type { Tab } from '../../composables/useTabs';
+import type { UnsavedTab } from '../../composables/useCloseConfirmation';
 
-// Mock Tauri APIs before importing the module
+// Captures the close callback so a test can fire a window-close itself.
+const windowMocks = vi.hoisted(() => ({
+  closeHandler: null as null | ((event: { preventDefault: () => void }) => Promise<void>),
+}));
+
+// A tiny in-memory filesystem, so the tests can assert on what actually landed
+// on disk rather than on the sequence of tmp-write / verify / rename calls that
+// the atomic write performs.
+const fsMocks = vi.hoisted(() => {
+  const files = new Map<string, string>();
+  return {
+    files,
+    writeTextFile: vi.fn(async (path: string, content: string) => {
+      files.set(path, content);
+    }),
+    readTextFile: vi.fn(async (path: string) => {
+      if (!files.has(path)) throw new Error(`no such file: ${path}`);
+      return files.get(path)!;
+    }),
+    rename: vi.fn(async (from: string, to: string) => {
+      files.set(to, files.get(from)!);
+      files.delete(from);
+    }),
+    remove: vi.fn(async (path: string) => {
+      files.delete(path);
+    }),
+    mkdir: vi.fn(async () => {}),
+  };
+});
+
 vi.mock('@tauri-apps/api/window', () => ({
   getCurrentWindow: vi.fn(() => ({
-    onCloseRequested: vi.fn(() => Promise.resolve(() => {})),
+    onCloseRequested: vi.fn((cb) => {
+      windowMocks.closeHandler = cb;
+      return Promise.resolve(() => {});
+    }),
   })),
 }));
 
@@ -17,16 +49,18 @@ vi.mock('@tauri-apps/plugin-dialog', () => ({
   save: vi.fn(() => Promise.resolve(null)),
 }));
 
-vi.mock('@tauri-apps/plugin-fs', () => ({
-  writeTextFile: vi.fn(() => Promise.resolve()),
+vi.mock('@tauri-apps/plugin-fs', () => fsMocks);
+
+vi.mock('@tauri-apps/api/path', () => ({
+  appDataDir: vi.fn(async () => 'D:/appdata'),
+  join: vi.fn(async (...parts: string[]) => parts.join('/')),
 }));
 
-import { writeTextFile } from '@tauri-apps/plugin-fs';
 import { useCloseConfirmation } from '../../composables/useCloseConfirmation';
 
 describe('useCloseConfirmation', () => {
   const createMockTab = (overrides: Partial<Tab> = {}): Tab => ({
-    id: `tab-${Math.random().toString(36).substr(2, 9)}`,
+    id: `tab-${Math.random().toString(36).slice(2, 11)}`,
     filePath: null,
     fileName: 'Test Document',
     content: '<p>Test content</p>',
@@ -36,81 +70,133 @@ describe('useCloseConfirmation', () => {
     ...overrides,
   });
 
-  const createMockOptions = (tabsArray: Tab[] = [createMockTab()]) => {
-    const tabs = ref<Tab[]>(tabsArray);
+  const createMockOptions = (unsaved: UnsavedTab[] = []) => ({
+    collectUnsavedTabs: vi.fn(() => unsaved),
+    getTabMarkdown: vi.fn((_paneId: string, tab: Tab) => tab.content),
+    switchToTab: vi.fn(() => Promise.resolve()),
+    syncActiveTabContent: vi.fn(),
+  });
 
-    return {
-      tabs,
-      getTabMarkdown: vi.fn((tab: Tab) => tab.content),
-      switchToTab: vi.fn(() => Promise.resolve()),
-      syncActiveTabContent: vi.fn(),
-    };
+  /** Fires a window-close and returns the event, so the test can assert on it. */
+  const requestClose = async () => {
+    const event = { preventDefault: vi.fn() };
+    await windowMocks.closeHandler!(event);
+    return event;
   };
 
   beforeEach(() => {
     vi.clearAllMocks();
+    fsMocks.files.clear();
+    windowMocks.closeHandler = null;
   });
 
   describe('initial state', () => {
     it('should initialize with dialog hidden', () => {
-      const options = createMockOptions();
-      const { showSaveConfirmDialog } = useCloseConfirmation(options);
+      const { showSaveConfirmDialog } = useCloseConfirmation(createMockOptions());
 
       expect(showSaveConfirmDialog.value).toBe(false);
     });
 
     it('should initialize with no current tab to save', () => {
-      const options = createMockOptions();
-      const { currentTabToSave } = useCloseConfirmation(options);
+      const { currentTabToSave } = useCloseConfirmation(createMockOptions());
 
       expect(currentTabToSave.value).toBe(null);
     });
 
     it('should initialize with zero tabs to save count', () => {
-      const options = createMockOptions();
-      const { tabsToSaveCount } = useCloseConfirmation(options);
+      const { tabsToSaveCount } = useCloseConfirmation(createMockOptions());
 
       expect(tabsToSaveCount.value).toBe(0);
     });
   });
 
-  describe('collectUnsavedTabs (via internal behavior)', () => {
-    it('should detect tabs with unsaved changes', () => {
-      const tab1 = createMockTab({ id: 'tab-1', hasChanges: true, fileName: 'Unsaved 1' });
-      const tab2 = createMockTab({ id: 'tab-2', hasChanges: false, fileName: 'Saved' });
-      const tab3 = createMockTab({ id: 'tab-3', hasChanges: true, fileName: 'Unsaved 2' });
+  describe('closing with unsaved work', () => {
+    it('lets the window close when nothing is dirty', async () => {
+      const { setupCloseHandler, showSaveConfirmDialog } = useCloseConfirmation(createMockOptions());
 
-      const options = createMockOptions([tab1, tab2, tab3]);
-      const { tabs } = options;
+      await setupCloseHandler();
+      const event = await requestClose();
 
-      // Verify tabs are set up correctly
-      expect(tabs.value.length).toBe(3);
-      expect(tabs.value.filter(t => t.hasChanges).length).toBe(2);
+      expect(event.preventDefault).not.toHaveBeenCalled();
+      expect(showSaveConfirmDialog.value).toBe(false);
     });
 
-    it('should detect single tab with unsaved changes', () => {
-      const tab = createMockTab({ hasChanges: true });
-      const options = createMockOptions([tab]);
+    it('holds the window open and prompts for each dirty tab', async () => {
+      const first = createMockTab({ id: 'tab-1', hasChanges: true, fileName: 'One.md' });
+      const second = createMockTab({ id: 'tab-2', hasChanges: true, fileName: 'Two.md' });
 
-      expect(options.tabs.value[0].hasChanges).toBe(true);
+      const { setupCloseHandler, showSaveConfirmDialog, tabsToSaveCount } = useCloseConfirmation(
+        createMockOptions([
+          { paneId: 'left', tab: first },
+          { paneId: 'left', tab: second },
+        ]),
+      );
+
+      await setupCloseHandler();
+      const event = await requestClose();
+
+      expect(event.preventDefault).toHaveBeenCalled();
+      expect(showSaveConfirmDialog.value).toBe(true);
+      expect(tabsToSaveCount.value).toBe(2);
     });
 
-    it('should detect no unsaved changes when all tabs are saved', () => {
-      const tab1 = createMockTab({ hasChanges: false });
-      const tab2 = createMockTab({ hasChanges: false });
+    // Regression: the collection used to read the focused pane's tab list only,
+    // so edits sitting in the other half of a split view were dropped on close
+    // without any prompt at all.
+    it('prompts for dirty tabs in every pane, not only the focused one', async () => {
+      const left = createMockTab({ id: 'left-1', hasChanges: true, fileName: 'Left.md' });
+      const right = createMockTab({ id: 'right-1', hasChanges: true, fileName: 'Right.md' });
 
-      const options = createMockOptions([tab1, tab2]);
+      const { setupCloseHandler, tabsToSaveCount, currentTabToSave } = useCloseConfirmation(
+        createMockOptions([
+          { paneId: 'left', tab: left },
+          { paneId: 'right', tab: right },
+        ]),
+      );
 
-      expect(options.tabs.value.every(t => !t.hasChanges)).toBe(true);
+      await setupCloseHandler();
+      await requestClose();
+
+      expect(tabsToSaveCount.value).toBe(2);
+      expect(currentTabToSave.value?.tab.fileName).toBe('Left.md');
+    });
+
+    it('focuses the pane that owns the tab before asking about it', async () => {
+      const right = createMockTab({ id: 'right-1', hasChanges: true, fileName: 'Right.md' });
+      const options = createMockOptions([{ paneId: 'right', tab: right }]);
+
+      const { setupCloseHandler } = useCloseConfirmation(options);
+
+      await setupCloseHandler();
+      await requestClose();
+
+      expect(options.switchToTab).toHaveBeenCalledWith('right', 'right-1');
+    });
+
+    it('serializes a tab against the pane that holds it', async () => {
+      const right = createMockTab({
+        id: 'right-1',
+        filePath: 'D:/notes/right.md',
+        hasChanges: true,
+        originalMarkdown: '# Old',
+      });
+      const options = createMockOptions([{ paneId: 'right', tab: right }]);
+
+      const { setupCloseHandler, handleSave } = useCloseConfirmation(options);
+
+      await setupCloseHandler();
+      await requestClose();
+      await handleSave();
+
+      expect(options.getTabMarkdown).toHaveBeenCalledWith('right', right);
     });
   });
 
   describe('handleCancel', () => {
     it('should hide dialog and clear state', () => {
-      const options = createMockOptions();
-      const { showSaveConfirmDialog, currentTabToSave, handleCancel } = useCloseConfirmation(options);
+      const { showSaveConfirmDialog, currentTabToSave, handleCancel } =
+        useCloseConfirmation(createMockOptions());
 
-      // Simulate dialog being shown
       showSaveConfirmDialog.value = true;
 
       handleCancel();
@@ -121,13 +207,11 @@ describe('useCloseConfirmation', () => {
   });
 
   describe('handleDiscard', () => {
-    it('should mark current tab as not having changes', async () => {
+    it('should mark current tab as not having changes', () => {
       const tab = createMockTab({ hasChanges: true });
-      const options = createMockOptions([tab]);
-      const { currentTabToSave, handleDiscard } = useCloseConfirmation(options);
+      const { currentTabToSave, handleDiscard } = useCloseConfirmation(createMockOptions());
 
-      // Simulate having a current tab to save
-      currentTabToSave.value = { tab, index: 0 };
+      currentTabToSave.value = { paneId: 'left', tab };
 
       handleDiscard();
 
@@ -135,67 +219,19 @@ describe('useCloseConfirmation', () => {
     });
 
     it('should do nothing if no current tab to save', () => {
-      const options = createMockOptions();
-      const { handleDiscard } = useCloseConfirmation(options);
+      const { handleDiscard } = useCloseConfirmation(createMockOptions());
 
-      // Should not throw
       expect(() => handleDiscard()).not.toThrow();
     });
   });
 
   describe('setupCloseHandler', () => {
     it('should return an unlisten function', async () => {
-      const options = createMockOptions();
-      const { setupCloseHandler } = useCloseConfirmation(options);
+      const { setupCloseHandler } = useCloseConfirmation(createMockOptions());
 
       const unlisten = await setupCloseHandler();
 
       expect(typeof unlisten).toBe('function');
-    });
-  });
-
-  describe('multiple tabs with changes', () => {
-    it('should track correct count of tabs to save', () => {
-      const tab1 = createMockTab({ id: 'tab-1', hasChanges: true });
-      const tab2 = createMockTab({ id: 'tab-2', hasChanges: true });
-      const tab3 = createMockTab({ id: 'tab-3', hasChanges: false });
-
-      const options = createMockOptions([tab1, tab2, tab3]);
-
-      const unsavedCount = options.tabs.value.filter(t => t.hasChanges).length;
-      expect(unsavedCount).toBe(2);
-    });
-
-    it('should properly identify unsaved tabs by name', () => {
-      const tabs = [
-        createMockTab({ id: 'tab-1', fileName: 'Document 1', hasChanges: true }),
-        createMockTab({ id: 'tab-2', fileName: 'Document 2', hasChanges: false }),
-        createMockTab({ id: 'tab-3', fileName: 'Document 3', hasChanges: true }),
-      ];
-
-      const options = createMockOptions(tabs);
-
-      const unsavedFileNames = options.tabs.value
-        .filter(t => t.hasChanges)
-        .map(t => t.fileName);
-
-      expect(unsavedFileNames).toEqual(['Document 1', 'Document 3']);
-    });
-  });
-
-  describe('syncActiveTabContent', () => {
-    it('should call syncActiveTabContent when provided', () => {
-      const syncFn = vi.fn();
-      const options = {
-        ...createMockOptions(),
-        syncActiveTabContent: syncFn,
-      };
-
-      useCloseConfirmation(options);
-
-      // syncActiveTabContent is called internally when close is requested
-      // This test verifies it's properly passed through
-      expect(options.syncActiveTabContent).toBeDefined();
     });
   });
 
@@ -214,15 +250,15 @@ describe('useCloseConfirmation', () => {
       const onSaveFailed = vi.fn();
 
       const { handleSave, currentTabToSave } = useCloseConfirmation({
-        ...createMockOptions([tab]),
+        ...createMockOptions(),
         getTabMarkdown: () => null,
         onSaveFailed,
       });
 
-      currentTabToSave.value = { tab, index: 0 };
+      currentTabToSave.value = { paneId: 'left', tab };
       await handleSave();
 
-      expect(writeTextFile).not.toHaveBeenCalled();
+      expect(fsMocks.files.size).toBe(0);
       expect(onSaveFailed).toHaveBeenCalledWith(tab);
     });
 
@@ -235,11 +271,11 @@ describe('useCloseConfirmation', () => {
       });
 
       const { handleSave, currentTabToSave } = useCloseConfirmation({
-        ...createMockOptions([tab]),
+        ...createMockOptions(),
         getTabMarkdown: () => null,
       });
 
-      currentTabToSave.value = { tab, index: 0 };
+      currentTabToSave.value = { paneId: 'left', tab };
       await handleSave();
 
       expect(tab.hasChanges).toBe(true);
@@ -255,15 +291,15 @@ describe('useCloseConfirmation', () => {
       const onSaveFailed = vi.fn();
 
       const { handleSave, currentTabToSave } = useCloseConfirmation({
-        ...createMockOptions([tab]),
+        ...createMockOptions(),
         getTabMarkdown: () => '',
         onSaveFailed,
       });
 
-      currentTabToSave.value = { tab, index: 0 };
+      currentTabToSave.value = { paneId: 'left', tab };
       await handleSave();
 
-      expect(writeTextFile).not.toHaveBeenCalled();
+      expect(fsMocks.files.size).toBe(0);
       expect(onSaveFailed).toHaveBeenCalledWith(tab);
       expect(tab.hasChanges).toBe(true);
     });
@@ -277,14 +313,14 @@ describe('useCloseConfirmation', () => {
       });
 
       const { handleSave, currentTabToSave } = useCloseConfirmation({
-        ...createMockOptions([tab]),
+        ...createMockOptions(),
         getTabMarkdown: () => '# Hours of work\n',
       });
 
-      currentTabToSave.value = { tab, index: 0 };
+      currentTabToSave.value = { paneId: 'left', tab };
       await handleSave();
 
-      expect(writeTextFile).toHaveBeenCalledWith('D:/notes/important.md', '# Hours of work');
+      expect(fsMocks.files.get('D:/notes/important.md')).toBe('# Hours of work');
       expect(tab.hasChanges).toBe(false);
       expect(tab.originalMarkdown).toBe('# Hours of work');
     });
@@ -298,14 +334,59 @@ describe('useCloseConfirmation', () => {
       });
 
       const { handleSave, currentTabToSave } = useCloseConfirmation({
-        ...createMockOptions([tab]),
+        ...createMockOptions(),
         getTabMarkdown: () => '',
       });
 
-      currentTabToSave.value = { tab, index: 0 };
+      currentTabToSave.value = { paneId: 'left', tab };
       await handleSave();
 
-      expect(writeTextFile).toHaveBeenCalledWith('D:/notes/scratch.md', '');
+      expect(fsMocks.files.get('D:/notes/scratch.md')).toBe('');
+    });
+
+    it('leaves no temporary file behind after a successful save', async () => {
+      const tab = createMockTab({
+        id: 'tab-1',
+        filePath: 'D:/notes/important.md',
+        hasChanges: true,
+        originalMarkdown: '# Old',
+      });
+
+      const { handleSave, currentTabToSave } = useCloseConfirmation({
+        ...createMockOptions(),
+        getTabMarkdown: () => '# New',
+      });
+
+      currentTabToSave.value = { paneId: 'left', tab };
+      await handleSave();
+
+      expect(fsMocks.files.has('D:/notes/important.md.tmp')).toBe(false);
+    });
+
+    // The original file has to survive a failed write, which is the whole point
+    // of going through a temporary sibling.
+    it('leaves the previous file intact when the write fails', async () => {
+      fsMocks.files.set('D:/notes/important.md', '# Hours of work');
+      fsMocks.rename.mockRejectedValueOnce(new Error('disk full'));
+
+      const tab = createMockTab({
+        id: 'tab-1',
+        filePath: 'D:/notes/important.md',
+        hasChanges: true,
+        originalMarkdown: '# Hours of work',
+      });
+
+      const { handleSave, currentTabToSave } = useCloseConfirmation({
+        ...createMockOptions(),
+        getTabMarkdown: () => '# Replacement',
+      });
+
+      currentTabToSave.value = { paneId: 'left', tab };
+      await handleSave();
+
+      expect(fsMocks.files.get('D:/notes/important.md')).toBe('# Hours of work');
+      expect(fsMocks.files.has('D:/notes/important.md.tmp')).toBe(false);
+      expect(tab.hasChanges).toBe(true);
     });
   });
 });

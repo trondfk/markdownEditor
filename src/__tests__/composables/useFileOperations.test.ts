@@ -293,6 +293,54 @@ describe('useFileOperations', () => {
     });
   });
 
+  // Ctrl+S is exempt from the truncation guard on purpose, because emptying a
+  // file by hand is a real edit. It must still refuse to write when nothing can
+  // say what the document contains, instead of falling through to the WYSIWYG
+  // editor and serializing its '<p></p>' placeholder into an empty file.
+  describe('getSaveMarkdown (explicit save floor)', () => {
+    it('writes what the serializer resolved rather than converting editor HTML', async () => {
+      const resolved = '# From the serializer';
+      const getSaveMarkdown = vi.fn(() => resolved);
+
+      mockReadTextFile.mockImplementation(async (path: string) => {
+        if (path.endsWith('.tmp')) return resolved;
+        return '# hello';
+      });
+
+      const { options } = makeOptions();
+      const { saveFile } = useFileOperations({ ...options, getSaveMarkdown });
+
+      await saveFile();
+
+      expect(mockWriteTextFile).toHaveBeenCalledWith('/test/file.md.tmp', resolved);
+    });
+
+    it('abandons the save when no editor can supply the content', async () => {
+      const onSaveFailed = vi.fn();
+      const { options } = makeOptions();
+      const { saveFile } = useFileOperations({
+        ...options,
+        getSaveMarkdown: () => null,
+        onSaveFailed,
+      });
+
+      await saveFile();
+
+      expect(mockWriteTextFile).not.toHaveBeenCalled();
+      expect(mockRename).not.toHaveBeenCalled();
+      expect(onSaveFailed).toHaveBeenCalled();
+    });
+
+    it('leaves the tab dirty when the save was abandoned', async () => {
+      const { options, tabs } = makeOptions({ hasChanges: true });
+      const { saveFile } = useFileOperations({ ...options, getSaveMarkdown: () => null });
+
+      await saveFile();
+
+      expect(tabs.value[0].hasChanges).toBe(true);
+    });
+  });
+
   // ----------------------------------------------------------
   // Pre-save conflict detection
   // ----------------------------------------------------------

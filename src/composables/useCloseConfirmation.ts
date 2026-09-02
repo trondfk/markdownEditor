@@ -2,24 +2,35 @@ import { ref, type Ref } from 'vue';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { exit } from '@tauri-apps/plugin-process';
 import { save } from '@tauri-apps/plugin-dialog';
-import { writeTextFile } from '@tauri-apps/plugin-fs';
 import { wouldTruncateDocument } from '../utils/save-guard';
+import { atomicWriteTextFile } from '../utils/atomic-write';
+import { auditShrink } from '../utils/save-audit';
 import type { Tab } from './useTabs';
 
-export interface TabToSave {
+/** A dirty tab together with the pane that holds it. */
+export interface UnsavedTab {
+  paneId: string;
   tab: Tab;
-  index: number;
 }
 
+export type TabToSave = UnsavedTab;
+
 export interface UseCloseConfirmationOptions {
-  tabs: Ref<Tab[]>;
+  /**
+   * Every tab in the window with unsaved changes, across all panes.
+   *
+   * This has to span panes. Collecting only the focused pane's tabs let a
+   * split pane's edits be discarded on close without so much as a prompt.
+   */
+  collectUnsavedTabs: () => UnsavedTab[];
   /**
    * Serializes a tab to markdown, or returns null when no mounted editor can
    * supply its text. Never falls back to a placeholder: a null here means the
    * save must be skipped, not that the document is empty.
    */
-  getTabMarkdown: (tab: Tab) => string | null;
-  switchToTab: (tabId: string, preserveHasChanges?: boolean) => Promise<void>;
+  getTabMarkdown: (paneId: string, tab: Tab) => string | null;
+  /** Focuses a tab, switching panes when the tab lives in the other one. */
+  switchToTab: (paneId: string, tabId: string) => Promise<void>;
   syncActiveTabContent?: () => void;
   /** Surfaces a save that could not be performed, so the user isn't stuck. */
   onSaveFailed?: (tab: Tab) => void;
@@ -37,23 +48,14 @@ export interface UseCloseConfirmationReturn {
 }
 
 export function useCloseConfirmation(options: UseCloseConfirmationOptions): UseCloseConfirmationReturn {
-  const { tabs, getTabMarkdown, switchToTab, syncActiveTabContent, onSaveFailed } = options;
+  const { collectUnsavedTabs, getTabMarkdown, switchToTab, syncActiveTabContent, onSaveFailed } =
+    options;
 
   const showSaveConfirmDialog = ref(false);
   const currentTabToSave = ref<TabToSave | null>(null);
   const tabsToSave = ref<TabToSave[]>([]);
   const tabsToSaveCount = ref(0);
   const currentTabIndex = ref(0);
-
-  const collectUnsavedTabs = (): TabToSave[] => {
-    const unsaved: TabToSave[] = [];
-    tabs.value.forEach((tab, index) => {
-      if (tab.hasChanges) {
-        unsaved.push({ tab, index });
-      }
-    });
-    return unsaved;
-  };
 
   const closeWindow = async (): Promise<void> => {
     // Force exit the application
@@ -73,16 +75,18 @@ export function useCloseConfirmation(options: UseCloseConfirmationOptions): UseC
     currentTabToSave.value = tabsToSave.value.shift() || null;
 
     if (currentTabToSave.value) {
-      // Switch to the tab so user can see what they're saving
-      switchToTab(currentTabToSave.value.tab.id, true);
+      // Switch to the tab so user can see what they're saving. Focusing it also
+      // mounts its editor, which is what lets the serializer read live text for
+      // a tab that was sitting in the unfocused pane.
+      switchToTab(currentTabToSave.value.paneId, currentTabToSave.value.tab.id);
     }
   };
 
-  const saveTabContent = async (tab: Tab): Promise<boolean> => {
+  const saveTabContent = async (paneId: string, tab: Tab): Promise<boolean> => {
     try {
       // Resolve the text before prompting for a path, so a tab we cannot
-      // serialize never reaches writeTextFile.
-      const source = getTabMarkdown(tab);
+      // serialize never reaches the disk.
+      const source = getTabMarkdown(paneId, tab);
       if (source === null) {
         console.error('[close] no editor could supply content for', tab.fileName);
         onSaveFailed?.(tab);
@@ -106,7 +110,8 @@ export function useCloseConfirmation(options: UseCloseConfirmationOptions): UseC
       }
 
       if (filePath) {
-        await writeTextFile(filePath, markdown);
+        auditShrink('close-save', filePath, markdown, tab.originalMarkdown);
+        await atomicWriteTextFile(filePath, markdown);
 
         // Update the tab
         tab.filePath = filePath;
@@ -127,7 +132,10 @@ export function useCloseConfirmation(options: UseCloseConfirmationOptions): UseC
   const handleSave = async (): Promise<void> => {
     if (!currentTabToSave.value) return;
 
-    const saved = await saveTabContent(currentTabToSave.value.tab);
+    const saved = await saveTabContent(
+      currentTabToSave.value.paneId,
+      currentTabToSave.value.tab,
+    );
 
     if (saved) {
       processNextTab();

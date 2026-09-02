@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue';
-import { writeTextFile } from '@tauri-apps/plugin-fs';
 import { useSplitView, MIN_SPLIT_RATIO, MAX_SPLIT_RATIO } from '../composables/useSplitView';
 import { useTabDrag } from '../composables/useTabDrag';
 import { useWindowManager } from '../composables/useWindowManager';
 import { htmlToMarkdown } from '../utils/markdown-converter';
 import { wouldTruncateDocument } from '../utils/save-guard';
+import { atomicWriteTextFile } from '../utils/atomic-write';
+import { auditShrink } from '../utils/save-audit';
 import { ratioFromPointer } from '../utils/resize';
 import type { Tab } from '../composables/useTabs';
 import EditorPane from './EditorPane.vue';
@@ -102,7 +103,8 @@ onMounted(() => {
           console.error('[transfer] refused to empty', filePath);
           return;
         }
-        await writeTextFile(filePath, markdownContent);
+        auditShrink('tab-transfer', filePath, markdownContent, tab.originalMarkdown);
+        await atomicWriteTextFile(filePath, markdownContent);
       }
 
       // Get current window label and all windows

@@ -1,8 +1,10 @@
 import { ref, computed, type Ref, type ComputedRef } from 'vue';
 import { open, save } from '@tauri-apps/plugin-dialog';
-import { readTextFile, writeTextFile, rename, remove } from '@tauri-apps/plugin-fs';
+import { readTextFile } from '@tauri-apps/plugin-fs';
 import { open as openExternal } from '@tauri-apps/plugin-shell';
 import { htmlToMarkdown, markdownToHtml, detectLineEnding, applyLineEnding, generateSlug } from '../utils/markdown-converter';
+import { atomicWriteTextFile } from '../utils/atomic-write';
+import { auditShrink } from '../utils/save-audit';
 import { aiCommands } from '../services/aiCommands';
 import type { Tab } from './useTabs';
 import { EMPTY_TAB_CONTENT, DEFAULT_FILE_NAME, DOM_SELECTORS, LARGE_FILE_CHAR_THRESHOLD } from '../constants';
@@ -18,6 +20,14 @@ export interface UseFileOperationsOptions {
   /** Optional override — when provided, used directly as markdown instead of converting from HTML.
    *  Use this to pass raw codeContent when saving from code view. */
   getMarkdownOverride?: () => string | null;
+  /** Serializes the active tab for writing, or null when no mounted editor can
+   *  speak for it. Preferred over getEditorHtml, which answers with the
+   *  empty-document placeholder in that case: a null here aborts the save
+   *  instead of writing that placeholder over a real file. */
+  getSaveMarkdown?: () => string | null;
+  /** Surfaces a save that had to be abandoned because the text could not be
+   *  resolved, so the user is not left believing the file was written. */
+  onSaveFailed?: () => void;
   setEditorContent: (content: string) => void;
   markSaveStart?: (filePath: string) => void;
   markSaveEnd?: (filePath: string, content: string) => void;
@@ -63,6 +73,8 @@ export function useFileOperations(options: UseFileOperationsOptions): UseFileOpe
     switchToTab,
     getEditorHtml,
     getMarkdownOverride,
+    getSaveMarkdown,
+    onSaveFailed,
     setEditorContent,
     markSaveStart,
     markSaveEnd,
@@ -175,21 +187,13 @@ export function useFileOperations(options: UseFileOperationsOptions): UseFileOpe
   };
 
   const atomicWriteFile = async (filePath: string, content: string): Promise<void> => {
-    const tmpPath = filePath + '.tmp';
     try {
       markSaveStart?.(filePath);
-      await writeTextFile(tmpPath, content);
-      // Verify written content matches expected
-      const written = await readTextFile(tmpPath);
-      if (written !== content) {
-        throw new Error('Atomic save verification failed: written content does not match');
-      }
-      await rename(tmpPath, filePath);
+      await atomicWriteTextFile(filePath, content);
+    } finally {
+      // Release the watcher guard whether or not the write landed, otherwise a
+      // failed save leaves the file looking permanently mid-write.
       markSaveEnd?.(filePath, content);
-    } catch (error) {
-      markSaveEnd?.(filePath, content); // release watcher guard even on failure
-      try { await remove(tmpPath); } catch { /* temp file may not exist */ }
-      throw error;
     }
   };
 
@@ -197,8 +201,24 @@ export function useFileOperations(options: UseFileOperationsOptions): UseFileOpe
     // When in code view, getMarkdownOverride() returns the raw markdown directly —
     // avoids the empty-content bug caused by SplitContainer being unmounted.
     const markdownOverride = getMarkdownOverride?.() ?? null;
+    // Only used to refresh the cached tab HTML after a visual-mode save, never
+    // as the source of the write.
     const html = markdownOverride === null ? getEditorHtml() : null;
-    let markdown = (markdownOverride ?? htmlToMarkdown(html!)).trimEnd();
+
+    // The text to write comes from the serializer, which answers null when no
+    // mounted editor owns the document. Falling through to getEditorHtml() at
+    // that point is what let the '<p></p>' placeholder, which converts to an
+    // empty string, reach the disk.
+    const source = getSaveMarkdown
+      ? getSaveMarkdown()
+      : (markdownOverride ?? htmlToMarkdown(html!));
+    if (source === null) {
+      console.error('[save] no editor could supply content for', filePath);
+      onSaveFailed?.();
+      return;
+    }
+
+    let markdown = source.trimEnd();
 
     const tabIndex = findActiveTabIndex();
 
@@ -225,6 +245,10 @@ export function useFileOperations(options: UseFileOperationsOptions): UseFileOpe
           mergedContentApplied = true;
         }
       }
+    }
+
+    if (tabIndex !== -1) {
+      auditShrink('manual-save', filePath, markdown, tabs.value[tabIndex].originalMarkdown);
     }
 
     await atomicWriteFile(filePath, markdown);
