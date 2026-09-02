@@ -1,9 +1,9 @@
 {
   "name": "mermark-editor",
   "private": false,
-  "version": "0.7.4",
+  "version": "1.0.0",
   "description": "Modern Markdown editor with Mermaid diagram support",
-  "author": "Vesperino",
+  "author": "Trond Kvittingen",
   "license": "MIT",
   "packageManager": "pnpm@11.3.0",
   "repository": {

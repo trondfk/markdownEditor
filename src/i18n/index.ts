@@ -237,9 +237,6 @@ export interface Translations {
   noReleaseNotesForBuild: string;
   fullChangelog: string;
   changelog: string;
-  supportDev: string;
-  supportDevTooltip: string;
-  buyMeACoffee: string;
   updateFailed: string;
   updatesTab: string;
   checkForUpdates: string;

@@ -11,7 +11,6 @@
   <a href="https://github.com/trondfk/markdownEditor/blob/main/LICENSE"><img src="https://img.shields.io/github/license/trondfk/markdownEditor?style=flat" alt="License"></a>
   <a href="https://github.com/trondfk/markdownEditor/stargazers"><img src="https://img.shields.io/github/stars/trondfk/markdownEditor?style=flat" alt="Stars"></a>
   <a href="https://github.com/trondfk/markdownEditor/releases"><img src="https://img.shields.io/github/downloads/trondfk/markdownEditor/total?style=flat&color=brightgreen&cacheSeconds=300" alt="Downloads"></a>
-  <a href="https://buymeacoffee.com/vesperinio"><img src="https://img.shields.io/badge/Buy_me_a_coffee-FFDD00?style=flat&logo=buy-me-a-coffee&logoColor=black" alt="Buy me a coffee"></a>
 </p>
 
 <p align="center">
@@ -26,7 +25,7 @@
 
 ---
 
-> **This is a fork.** MerMark Editor was created by [Vesperino](https://github.com/Vesperino) — the original project lives at [Vesperino/MerMarkEditor](https://github.com/Vesperino/MerMarkEditor) and is MIT licensed. This repository is maintained independently by [trondfk](https://github.com/trondfk); releases here are built, signed and updated separately from upstream.
+> **This is a fork.** MerMark Editor was created by [Vesperino](https://github.com/Vesperino), and the original project lives at [Vesperino/MerMarkEditor](https://github.com/Vesperino/MerMarkEditor) under the MIT license. This repository is maintained independently by [trondfk](https://github.com/trondfk); releases here are built, signed and updated separately from upstream.
 
 ---
 
@@ -187,7 +186,7 @@ Run your own model server? Pick **OpenAI-compatible** as the provider and point 
 - Each assistant reply is parsed for a `mermaid` fenced block and rendered live in place of the saved diagram.
 - **Apply ✓ / Discard × / Stop** buttons appear in the panel chip; Apply commits to the node, Discard keeps iterating, Stop ends the session.
 
-The full feature list — including snapshot rotation, tmp-recovery on crashed sessions, multi-window-safe streaming and per-CLI session isolation — lives in [RELEASE_NOTES.md](RELEASE_NOTES.md).
+The full feature list, including snapshot rotation, tmp-recovery on crashed sessions, multi-window-safe streaming and per-CLI session isolation, lives in the [changelog](CHANGELOG.md).
 
 ---
 
@@ -515,18 +514,5 @@ MerMark is and will stay free and open source under the MIT license. If you find
 - Giving it a star on GitHub
 - Reporting bugs and suggesting features
 - Contributing to the codebase
-- [Buying me a coffee](https://buymeacoffee.com/vesperinio) — totally optional, just a way to say thanks if MerMark saves you time
-
-<p align="center">
-  <a href="https://buymeacoffee.com/vesperinio">
-    <img src="https://img.shields.io/badge/Buy_me_a_coffee-FFDD00?style=flat&logo=buy-me-a-coffee&logoColor=black" alt="Buy me a coffee" />
-  </a>
-</p>
-
----
-
-<p align="center">
-  Made with ❤️ by <a href="https://github.com/Vesperino">Vesperino</a>
-</p>
 
 <!-- SEO Keywords (hidden): markdown editor, mermaid diagrams, flowchart editor, sequence diagram tool, documentation editor, technical writing, wysiwyg markdown, desktop markdown editor, open source markdown, diagram markdown editor, best markdown editor, free markdown editor, markdown with diagrams, mermaid markdown editor, offline markdown editor -->
