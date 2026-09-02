@@ -4,11 +4,13 @@ import { useI18n } from '../i18n';
 import { useTokenCounter } from './useTokenCounter';
 import { useEditorZoom } from './useEditorZoom';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
+import { HIGHLIGHT_COLORS, normalizeHighlightColor } from '../utils/highlight-colors';
 
 // Singleton state for dropdowns and editor update counter
 const showTableMenu = ref(false);
 const showImageMenu = ref(false);
 const showTokenMenu = ref(false);
+const showHighlightMenu = ref(false);
 const editorUpdateCounter = ref(0);
 
 // ===== Shared editor-update listener =====
@@ -161,6 +163,24 @@ export function useToolbarActions() {
     showTableMenu.value = false;
   };
 
+  // Highlight
+  const setHighlight = (color: string) => {
+    runCommand((e) => e.chain().focus().setHighlight({ color }).run());
+    showHighlightMenu.value = false;
+  };
+
+  const unsetHighlight = () => {
+    runCommand((e) => e.chain().focus().unsetHighlight().run());
+    showHighlightMenu.value = false;
+  };
+
+  /** The colour under the cursor, so the picker can tick the active swatch. */
+  const currentHighlightColor = computed<string | null>(() => {
+    void editorUpdateCounter.value;
+    if (!editor?.value?.isActive('highlight')) return null;
+    return normalizeHighlightColor(editor.value.getAttributes('highlight').color);
+  });
+
   // Links and images
   const setLink = () => {
     const previousUrl = editor?.value?.getAttributes('customLink').href;
@@ -218,6 +238,7 @@ export function useToolbarActions() {
     showTableMenu.value = false;
     showImageMenu.value = false;
     showTokenMenu.value = false;
+    showHighlightMenu.value = false;
   };
 
   return {
@@ -257,6 +278,13 @@ export function useToolbarActions() {
     deleteRow,
     deleteColumn,
     deleteTable,
+
+    // Highlight
+    showHighlightMenu,
+    highlightColors: HIGHLIGHT_COLORS,
+    currentHighlightColor,
+    setHighlight,
+    unsetHighlight,
 
     // Links & images
     showImageMenu,

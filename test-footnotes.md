@@ -1,197 +1,197 @@
-# Przypisy (footnotes) — dokumentacja Markdown
+# Footnotes, a Markdown reference
 
-Przypisy pozwalają autorowi dołączyć notatki, cytowania lub uwagi do fragmentu tekstu bez przerywania głównego toku narracji. **Nie** są częścią rdzennego CommonMark — zarówno GitHub Flavored Markdown (GFM), jak i Pandoc obsługują je jako rozszerzenie. Większość nowoczesnych edytorów Markdown (w tym MerMark) trzyma się tej samej składni.
-
----
-
-## 1. Składnia
-
-### 1.1 Przypis referencyjny
-
-Przypis składa się z dwóch części: **odwołania** umieszczonego w tekście oraz **definicji** umieszczonej w innym miejscu dokumentu.
-
-```markdown
-Tu jest akapit z przypisem.[^1]
-
-[^1]: Treść przypisu.
-```
-
-Renderuje się jako: indeks górny `¹` przy słowie „przypisem" oraz numerowana lista na końcu dokumentu zawierająca treść i odnośnik powrotny (`↩`) do odwołania.
-
-### 1.2 Etykiety nazwane
-
-Identyfikatory mogą być **liczbami** lub **słowami**. Etykiety nazwane są zalecane w długich dokumentach, bo przeżywają zmiany kolejności.
-
-```markdown
-Jakość eksportu ma znaczenie.[^eksport]
-
-[^eksport]: Sprawdź jeden prawdziwy eksport przed udostępnieniem.
-```
-
-W finalnym renderze etykiety nazwane i tak są numerowane sekwencyjnie — etykieta służy wyłącznie do dopasowania odwołania do definicji.
-
-### 1.3 Przypisy inline (tylko Pandoc)
-
-Pandoc obsługuje skrót, gdzie treść przypisu pisze się bezpośrednio w miejscu odwołania:
-
-```markdown
-Tu jest przypis inline.^[Renderuje się jako przypis nr 1.]
-```
-
-GFM i większość innych parserów **nie** wspiera tej formy.
-
-### 1.4 Definicje wielolinijkowe / wieloblokowe
-
-Linie kontynuacji muszą być wcięte o **4 spacje** (lub jeden tabulator). Pozwala to przypisowi zawierać wiele akapitów, listy lub kod:
-
-```markdown
-[^multi]: Pierwsza linia przypisu.
-    Linia kontynuacji, dalej należy do tego samego przypisu.
-
-    Drugi akapit (pusta linia + 4 spacje wcięcia).
-```
+Footnotes let an author attach notes, citations or asides to a passage without interrupting the main line of the text. They are **not** part of core CommonMark; both GitHub Flavored Markdown (GFM) and Pandoc support them as an extension. Most modern Markdown editors, MerMark included, follow the same syntax.
 
 ---
 
-## 2. Reguły identyfikatorów
+## 1. Syntax
 
-- Identyfikatory **nie mogą** zawierać spacji, tabulatorów, znaków nowej linii ani znaków `^`, `[`, `]`.
-- W większości parserów rozróżniana jest wielkość liter.
-- Definicja bez pasującego odwołania jest po cichu pomijana (lub zostaje jako zwykły tekst — zależnie od parsera).
-- Odwołanie bez pasującej definicji renderuje się jako literalny tekst — `[^missing]` zostaje widoczne.
-- Wielokrotne odwołania do tego samego id są dozwolone; definicja renderuje się raz i ma odnośniki powrotne do każdego odwołania.
+### 1.1 Reference footnote
 
----
-
-## 3. Reguły umieszczania
-
-**Definicje** przypisów żyją na poziomie głównego przepływu dokumentu. Łamią się, gdy są zagnieżdżone w:
-
-- elementach listy
-- cytatach blokowych
-- tabelach
-
-Niebezpieczne:
+A footnote has two parts: the **reference** placed in the text, and the **definition** placed elsewhere in the document.
 
 ```markdown
-- Punkt główny[^1]
-  [^1]: Treść przypisu     <-- zagnieżdżone w liście, może nie sparsować
+Here is a paragraph with a footnote.[^1]
+
+[^1]: The footnote text.
 ```
 
-Bezpieczne:
+This renders as a superscript `¹` next to the word "footnote", plus a numbered list at the end of the document holding the text and a back-link (`↩`) to the reference.
+
+### 1.2 Named labels
+
+Identifiers can be **numbers** or **words**. Named labels are recommended in long documents because they survive reordering.
 
 ```markdown
-- Punkt główny[^1]
+Export quality matters.[^export]
 
-[^1]: Treść przypisu        <-- poziom dokumentu, zawsze parsuje
+[^export]: Check one real export before you share it.
 ```
 
-Same odwołania mogą pojawić się wszędzie, gdzie dozwolony jest tekst inline: w akapitach, listach, komórkach tabel, nagłówkach.
+In the final render, named labels are numbered sequentially anyway; the label only exists to match a reference to its definition.
+
+### 1.3 Inline footnotes (Pandoc only)
+
+Pandoc supports a shorthand where the footnote text is written directly at the reference:
+
+```markdown
+Here is an inline footnote.^[Renders as footnote number 1.]
+```
+
+GFM and most other parsers do **not** support this form.
+
+### 1.4 Multi-line and multi-block definitions
+
+Continuation lines must be indented by **4 spaces** (or one tab). This lets a footnote hold several paragraphs, lists or code:
+
+```markdown
+[^multi]: First line of the footnote.
+    A continuation line, still part of the same footnote.
+
+    A second paragraph (blank line plus 4-space indent).
+```
 
 ---
 
-## 4. Przypadki brzegowe
+## 2. Identifier rules
 
-### 4.1 Wewnątrz kodu inline
-
-`` `[^1]` `` nigdy nie jest interpretowane jako odwołanie. Kod inline jest nieprzejrzysty dla parsera przypisów.
-
-### 4.2 Wewnątrz bloku kodu
-
-```
-[^1]: Ta linia zostaje jako literalny tekst — bloki kodu wyłączają parsowanie przypisów.
-```
-
-### 4.3 无脚注的段落
-
-不含任何引用与定义的文档会正常渲染，不会附加脚注小节。
+- Identifiers **cannot** contain spaces, tabs, newlines, or the characters `^`, `[`, `]`.
+- Most parsers treat them as case-sensitive.
+- A definition with no matching reference is silently dropped (or left as plain text, depending on the parser).
+- A reference with no matching definition renders literally, so `[^missing]` stays visible.
+- Several references to the same id are allowed; the definition renders once and back-links to each reference.
 
 ---
 
-## 5. GFM 对比 Pandoc
+## 3. Placement rules
 
-| Funkcja                          | GFM      | Pandoc   |
-|----------------------------------|:--------:|:--------:|
-| `[^label]` odwołanie + definicja | ✓        | ✓        |
-| Inline `^[...]`                  | ✗        | ✓        |
-| Wieloakapitowe przypisy          | ograniczone | ✓     |
-| Status                           | rozszerzenie | rozszerzenie |
+Footnote **definitions** live at the top level of the document flow. They break when nested inside:
 
-为在不同渲染器间保持可移植性，请坚持使用带命名标签的引用式脚注，并以 4 个空格缩进续行。
+- list items
+- block quotes
+- tables
+
+Risky:
+
+```markdown
+- A top-level item[^1]
+  [^1]: The footnote text     <-- nested in a list, may not parse
+```
+
+Safe:
+
+```markdown
+- A top-level item[^1]
+
+[^1]: The footnote text        <-- document level, always parses
+```
+
+References themselves may appear anywhere inline text is allowed: paragraphs, lists, table cells, headings.
 
 ---
 
-## 6. Jak parser przetwarza przypisy
+## 4. Edge cases
+
+### 4.1 Inside inline code
+
+`` `[^1]` `` is never read as a reference. Inline code is opaque to the footnote parser.
+
+### 4.2 Inside a code block
+
+```
+[^1]: This line stays literal, code blocks switch footnote parsing off.
+```
+
+### 4.3 A document with no footnotes
+
+A document with no references and no definitions renders normally, with no footnote section appended.
+
+---
+
+## 5. GFM compared with Pandoc
+
+| Feature                            | GFM       | Pandoc    |
+|------------------------------------|:---------:|:---------:|
+| `[^label]` reference + definition  | ✓         | ✓         |
+| Inline `^[...]`                    | ✗         | ✓         |
+| Multi-paragraph footnotes          | limited   | ✓         |
+| Status                             | extension | extension |
+
+For portability between renderers, stick to reference-style footnotes with named labels, and indent continuation lines by 4 spaces.
+
+---
+
+## 6. How a parser processes footnotes
 
 ```mermaid
 flowchart TD
-    A["Źródło Markdown"] --> B{"Skanowanie parsera"}
-    B -->|"Znajdź [^id] w tekście"| C["Token odwołania"]
-    B -->|"Znajdź [^id]: ... na początku linii"| D["Token definicji"]
-    C --> E["Zbierz odwołania w kolejności"]
-    D --> F["Zbierz definicje wg id"]
-    E --> G["Dopasuj id odwołania do definicji"]
+    A["Markdown source"] --> B{"Parser scan"}
+    B -->|"Find [^id] in text"| C["Reference token"]
+    B -->|"Find [^id]: ... at line start"| D["Definition token"]
+    C --> E["Collect references in order"]
+    D --> F["Collect definitions by id"]
+    E --> G["Match reference id to definition"]
     F --> G
-    G --> H{"Dopasowano?"}
-    H -->|"Tak"| I["Przypisz numer sekwencyjny"]
-    H -->|"Nie"| J["Renderuj jako zwykły tekst"]
-    I --> K["Renderuj odwołanie jako sup link<br/>sup a href #fn-id"]
-    I --> L["Renderuj definicję w sekcji przypisów<br/>ol na końcu dokumentu"]
-    L --> M["Dodaj odnośnik powrotny do odwołania"]
-    K --> N["Finalny HTML"]
+    G --> H{"Matched?"}
+    H -->|"Yes"| I["Assign sequential number"]
+    H -->|"No"| J["Render as plain text"]
+    I --> K["Render reference as sup link<br/>sup a href #fn-id"]
+    I --> L["Render definition in the footnote section<br/>ol at the end of the document"]
+    L --> M["Add a back-link to the reference"]
+    K --> N["Final HTML"]
     M --> N
 
-    subgraph Przypadki_brzegowe
-        X1["Wewnątrz kodu inline"] -.pomiń.-> B
-        X2["Wewnątrz bloku kodu"] -.pomiń.-> B
-        X3["Definicja wielolinijkowa: 4 spacje wcięcia"] --> D
+    subgraph Edge_cases
+        X1["Inside inline code"] -.skip.-> B
+        X2["Inside a code block"] -.skip.-> B
+        X3["Multi-line definition: 4-space indent"] --> D
     end
 ```
 
 ---
 
-## 7. Przykłady (na żywo w tym dokumencie)
+## 7. Examples (live in this document)
 
-To akapit z prostym przypisem[^1]. Odwołanie pojawia się jako numer w indeksie górnym.
+This is a paragraph with a simple footnote[^1]. The reference shows up as a superscript number.
 
-Tu kolejny akapit z przypisem nazwanym[^note].
+Here is another paragraph with a named footnote[^note].
 
-Możesz użyć wielu przypisów[^2] w tym samym akapicie[^3]. Numerowane są sekwencyjnie.
+You can use several footnotes[^2] in the same paragraph[^3]. They are numbered sequentially.
 
-Przypis z **pogrubionym** tekstem w treści[^4].
+A footnote with **bold** text in its body[^4].
 
-Przypisy są często używane w pisarstwie akademickim[^5] i dokumentacji technicznej[^2]. Zauważ, że `[^2]` jest referowane dwa razy.
+Footnotes are common in academic writing[^5] and in technical documentation[^2]. Note that `[^2]` is referenced twice.
 
-Definicje wielolinijkowe są obsługiwane[^multi].
-
----
-
-## 8. Uwagi do eksportu
-
-Przypisy to składnia rozszerzenia — eksportowany wynik zależy od renderera:
-
-- **HTML**: `<sup><a href="#fn-id">N</a></sup>` + `<ol>` z definicjami.
-- **PDF / LaTeX**: prawdziwe przypisy u dołu strony przez `\footnote{}`.
-- **DOCX**: natywne przypisy Worda (u dołu strony) przez Pandoc.
-- **Zwykłe podglądy Markdown bez rozszerzenia**: renderowane jako literalny tekst `[^id]`.
-
-Zawsze testuj prawdziwy eksport, zanim polegniesz na umiejscowieniu.
+Multi-line definitions are supported[^multi].
 
 ---
 
-[^1]: Pierwszy przypis. Prosta definicja jednoliniowa.
-[^note]: Przypis z etykietą nazwaną zamiast numeru.
-[^2]: Drugi przypis, referowany wielokrotnie w dokumencie.
-[^3]: Trzeci przypis sprawdzający numerację sekwencyjną.
-[^4]: Treść przypisu może zawierać **pogrubienie**, *kursywę* i `kod`.
-[^5]: Patrz: Markdown Extended Syntax, dostępne w większości parserów Markdown.
-[^multi]: To pierwsza linia przypisu wielolinijkowego.
-    To linia kontynuacji (wcięta o 4 spacje).
-    I jeszcze jedna linia kontynuacji.
+## 8. Export notes
+
+Footnotes are extension syntax, so the exported result depends on the renderer:
+
+- **HTML**: `<sup><a href="#fn-id">N</a></sup>` plus an `<ol>` of definitions.
+- **PDF / LaTeX**: real footnotes at the bottom of the page via `\footnote{}`.
+- **DOCX**: native Word footnotes (bottom of the page) via Pandoc.
+- **Plain Markdown previews without the extension**: rendered as the literal text `[^id]`.
+
+Always test a real export before relying on placement.
 
 ---
 
-## Źródła
+[^1]: The first footnote. A simple single-line definition.
+[^note]: A footnote with a named label instead of a number.
+[^2]: The second footnote, referenced several times in the document.
+[^3]: A third footnote, checking sequential numbering.
+[^4]: Footnote text can contain **bold**, *italic* and `code`.
+[^5]: See: Markdown Extended Syntax, available in most Markdown parsers.
+[^multi]: This is the first line of a multi-line footnote.
+    This is a continuation line (indented by 4 spaces).
+    And one more continuation line.
+
+---
+
+## Sources
 
 - [Pandoc User's Guide](https://pandoc.org/MANUAL.html)
 - [Pandoc 8.19 Footnotes](https://pandoc.org/demo/example33/8.19-footnotes.html)

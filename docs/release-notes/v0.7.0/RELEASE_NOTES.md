@@ -3,8 +3,8 @@
 Open and edit multi-megabyte Markdown without freezing, see Markdown structure clearly in Code View, and render common README HTML directly in Visual Mode.
 
 <p>
-  <img src="https://raw.githubusercontent.com/Vesperino/MerMarkEditor/master/assets/screenshots/markdown-syntax-highlighting.png" alt="MerMark v0.7.0 — Markdown syntax highlighting in Code View" width="48%" />
-  <img src="https://raw.githubusercontent.com/Vesperino/MerMarkEditor/master/assets/screenshots/readme-html-rendering.png" alt="MerMark v0.7.0 — README HTML rendered in Visual Mode" width="48%" />
+  <img src="https://raw.githubusercontent.com/trondfk/markdownEditor/main/assets/screenshots/markdown-syntax-highlighting.png" alt="MerMark v0.7.0 — Markdown syntax highlighting in Code View" width="48%" />
+  <img src="https://raw.githubusercontent.com/trondfk/markdownEditor/main/assets/screenshots/readme-html-rendering.png" alt="MerMark v0.7.0 — README HTML rendered in Visual Mode" width="48%" />
 </p>
 
 ## Features

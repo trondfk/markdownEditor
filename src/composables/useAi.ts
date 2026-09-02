@@ -2,6 +2,7 @@ import { ref, computed, watch } from 'vue';
 import { aiCommands, type AiSendRequest, type AiResponseChunk, type CliKind, type AccessMap, type AiHistoryTurn } from '../services/aiCommands';
 import { useAiContext } from './useAiContext';
 import { useSettings, OLLAMA_MIN_NUM_CTX } from './useSettings';
+import { clampSummary, compactionTurnText, lastCompactionIndex } from '../utils/ai-compaction';
 
 export interface AttachedPin {
   id: string;
@@ -16,7 +17,7 @@ export interface AttachedImage {
 }
 
 export interface AiMessage {
-  role: 'user' | 'assistant' | 'tool' | 'attachment';
+  role: 'user' | 'assistant' | 'tool' | 'attachment' | 'compaction';
   text: string;
   /** When role === 'tool', this carries the tool name. */
   tool?: string;
@@ -24,6 +25,8 @@ export interface AiMessage {
   attachments?: AttachedPin[];
   /** When role === 'attachment', the images sent with the next user prompt. */
   imageAttachments?: AttachedImage[];
+  /** When role === 'compaction', how many messages the summary stands in for. */
+  compactedCount?: number;
   error?: string;
   done: boolean;
 }
@@ -122,10 +125,18 @@ function deriveTitle(msgs: AiMessage[]): string {
 /** Project prior thread turns into the wire history for local providers: only
  *  user/assistant text turns, skipping tool and attachment rows and empty or
  *  errored assistant turns (no tool_call_id references that strict servers
- *  reject). Chronological order preserved; the Rust side trims to budget. */
+ *  reject). Chronological order preserved; the Rust side trims to budget.
+ *
+ *  Replay starts at the newest compaction marker, whose summary stands in for
+ *  everything before it, so a compacted thread costs the summary instead of
+ *  the turns it replaced. */
 function buildHistory(msgs: AiMessage[]): AiHistoryTurn[] {
   const out: AiHistoryTurn[] = [];
-  for (const m of msgs) {
+  const cut = lastCompactionIndex(msgs);
+  if (cut >= 0) {
+    out.push({ role: 'user', content: compactionTurnText(msgs[cut].text) });
+  }
+  for (const m of msgs.slice(cut + 1)) {
     if (m.role !== 'user' && m.role !== 'assistant') continue;
     if (m.role === 'assistant' && (m.error || !m.text)) continue;
     out.push({ role: m.role, content: m.text });
@@ -154,6 +165,7 @@ const bypassEnabled = ref(false); // runtime-only — not persisted
 const docPathRef = ref<string>('');
 const store = ref<ThreadStore>(emptyStore());
 const isSending = ref(false);
+const isCompacting = ref(false);
 const inFlightRequestId = ref<string | null>(null);
 
 const activeThread = computed<AiThread | null>(() => {
@@ -190,6 +202,17 @@ export interface SendOpts {
   onSessionId?: (id: string) => void;
   onToolRequest?: (tool: string, args: unknown, requestId: string) => void;
   onToolDenied?: (tool: string, reason: string) => void;
+}
+
+/** A turn the app runs for itself: no images, no preamble, no turn context. */
+export interface SilentSendOpts {
+  cli: CliKind;
+  sessionId: string | null;
+  model: string | null;
+  effort: string | null;
+  prompt: string;
+  accessMap: AccessMap;
+  workDir: string;
 }
 
 function bindDoc(docPath: string) {
@@ -274,6 +297,86 @@ function pushAttachment(opts: AttachedPin[] | { pins?: AttachedPin[]; images?: A
   });
 }
 
+/** The wire request, minus the provider connection detail no caller supplies. */
+interface WireOpts {
+  cli: CliKind;
+  sessionId: string | null;
+  model: string | null;
+  effort: string | null;
+  prompt: string;
+  preamble: string;
+  turnContext: string;
+  accessMap: AccessMap;
+  workDir: string;
+  history: AiHistoryTurn[];
+  images?: string[];
+  docContent?: string;
+}
+
+function buildRequest(o: WireOpts): AiSendRequest {
+  const { settings } = useSettings();
+  // For ollama / openai the cliPath channel carries the base URL, not a binary path.
+  const overridePath = (o.cli === 'ollama'
+    ? (settings.value.ai.ollamaBaseUrl ?? '')
+    : o.cli === 'openai'
+      ? (settings.value.ai.openaiBaseUrl ?? '')
+      : o.cli === 'claude'
+        ? (settings.value.ai.cliPathClaude || settings.value.ai.cliResolvedPathClaude)
+        : (settings.value.ai.cliPathCodex || settings.value.ai.cliResolvedPathCodex)
+  ).trim();
+  return {
+    cli: o.cli,
+    sessionId: o.sessionId,
+    model: o.model,
+    effort: o.effort,
+    prompt: o.prompt,
+    preamble: o.preamble,
+    turnContext: o.turnContext,
+    accessMap: o.accessMap,
+    bypass: bypassEnabled.value,
+    workDir: o.workDir,
+    images: o.images ?? [],
+    cliPath: overridePath || null,
+    history: o.history,
+    docContent: o.docContent ?? null,
+    // Clamped here too (not only in the settings setter): a hand-edited
+    // negative value in the settings JSON would fail Rust's Option<u64>
+    // deserialization and break every ollama send.
+    numCtx: o.cli === 'ollama' && Number.isFinite(settings.value.ai.ollamaNumCtx)
+      ? Math.max(OLLAMA_MIN_NUM_CTX, Math.floor(settings.value.ai.ollamaNumCtx))
+      : null,
+  };
+}
+
+/**
+ * Drive one provider request to completion. Owns the request id, the stream
+ * listener's lifetime and the in-flight bookkeeping; what each chunk means is
+ * the caller's business. Throws on transport failure — the caller decides
+ * whether that belongs in the thread or is swallowed.
+ */
+async function runStream(
+  opts: WireOpts,
+  onChunk: (chunk: AiResponseChunk, finish: () => void) => void,
+): Promise<void> {
+  const requestId = crypto.randomUUID();
+  inFlightRequestId.value = requestId;
+
+  let resolveCompletion!: () => void;
+  const completion = new Promise<void>((r) => { resolveCompletion = r; });
+
+  const unlisten = await aiCommands.onStream(requestId, (chunk: AiResponseChunk) => {
+    onChunk(chunk, resolveCompletion);
+  });
+
+  try {
+    await aiCommands.send(buildRequest(opts), requestId);
+    await completion;
+  } finally {
+    unlisten();
+    inFlightRequestId.value = null;
+  }
+}
+
 export function useAi() {
   const aiContext = useAiContext();
 
@@ -298,99 +401,57 @@ export function useAi() {
     const assistantIdx = t.messages.length - 1;
     const getAssistant = () => getAssistantInActive(assistantIdx)!;
 
-    const requestId = crypto.randomUUID();
-    inFlightRequestId.value = requestId;
-
-    let resolveCompletion!: () => void;
-    const completion = new Promise<void>((r) => { resolveCompletion = r; });
-
-    const unlisten = await aiCommands.onStream(requestId, (chunk: AiResponseChunk) => {
-      const a = getAssistant();
-      if (!a) return;
-      switch (chunk.kind) {
-        case 'text':
-          a.text += chunk.content;
-          break;
-        case 'tool_request': {
-          // Append a permanent tool entry into the chat history.
-          const t = activeThread.value;
-          if (t) {
-            t.messages.push({
-              role: 'tool',
-              text: typeof chunk.args === 'object' ? JSON.stringify(chunk.args) : String(chunk.args ?? ''),
-              tool: chunk.tool,
-              done: true,
-            });
-            t.updatedAt = new Date().toISOString();
-          }
-          opts.onToolRequest?.(chunk.tool, chunk.args, chunk.requestId);
-          break;
-        }
-        case 'tool_denied':
-          opts.onToolDenied?.(chunk.tool, chunk.reason);
-          break;
-        case 'done': {
-          a.done = true;
-          aiContext.record(opts.cli, chunk.usage);
-          // Resolve by id — the user may have switched threads mid-stream, so
-          // the active thread is not necessarily the one this send targeted.
-          const tt = store.value.threads.find(th => th.id === targetThreadId);
-          if (tt) {
-            if (chunk.sessionId) tt.sessionId = chunk.sessionId;
-            // Only on success — a failed turn means the model never saw it.
-            if (opts.staticPreambleHash) tt.lastSentStaticHash = opts.staticPreambleHash;
-          }
-          // Local providers (ollama/openai) finish with an empty sessionId —
-          // never persist it, so their sends keep resolving to a null session
-          // (history replay) and the static preamble is always included.
-          if (chunk.sessionId) opts.onSessionId?.(chunk.sessionId);
-          resolveCompletion();
-          break;
-        }
-        case 'error':
-          a.error = chunk.message;
-          a.done = true;
-          resolveCompletion();
-          break;
-      }
-    });
-
-    const { settings } = useSettings();
-    // For ollama / openai the cliPath channel carries the base URL, not a binary path.
-    const overridePath = (opts.cli === 'ollama'
-      ? (settings.value.ai.ollamaBaseUrl ?? '')
-      : opts.cli === 'openai'
-        ? (settings.value.ai.openaiBaseUrl ?? '')
-        : opts.cli === 'claude'
-          ? (settings.value.ai.cliPathClaude || settings.value.ai.cliResolvedPathClaude)
-          : (settings.value.ai.cliPathCodex || settings.value.ai.cliResolvedPathCodex)
-    ).trim();
-    const req: AiSendRequest = {
-      cli: opts.cli,
-      sessionId: opts.sessionId,
-      model: opts.model,
-      effort: opts.effort,
-      prompt: opts.prompt,
-      preamble: opts.preamble,
-      turnContext: opts.turnContext,
-      accessMap: opts.accessMap,
-      bypass: bypassEnabled.value,
-      workDir: opts.workDir,
-      images: opts.images ?? [],
-      cliPath: overridePath || null,
-      history,
-      docContent: opts.docContent ?? null,
-      // Clamped here too (not only in the settings setter): a hand-edited
-      // negative value in the settings JSON would fail Rust's Option<u64>
-      // deserialization and break every ollama send.
-      numCtx: opts.cli === 'ollama' && Number.isFinite(settings.value.ai.ollamaNumCtx)
-        ? Math.max(OLLAMA_MIN_NUM_CTX, Math.floor(settings.value.ai.ollamaNumCtx))
-        : null,
-    };
-
     try {
-      await aiCommands.send(req, requestId);
-      await completion;
+      await runStream({ ...opts, history }, (chunk, finish) => {
+        const a = getAssistant();
+        if (!a) return;
+        switch (chunk.kind) {
+          case 'text':
+            a.text += chunk.content;
+            break;
+          case 'tool_request': {
+            // Append a permanent tool entry into the chat history.
+            const t = activeThread.value;
+            if (t) {
+              t.messages.push({
+                role: 'tool',
+                text: typeof chunk.args === 'object' ? JSON.stringify(chunk.args) : String(chunk.args ?? ''),
+                tool: chunk.tool,
+                done: true,
+              });
+              t.updatedAt = new Date().toISOString();
+            }
+            opts.onToolRequest?.(chunk.tool, chunk.args, chunk.requestId);
+            break;
+          }
+          case 'tool_denied':
+            opts.onToolDenied?.(chunk.tool, chunk.reason);
+            break;
+          case 'done': {
+            a.done = true;
+            aiContext.record(opts.cli, chunk.usage);
+            // Resolve by id — the user may have switched threads mid-stream, so
+            // the active thread is not necessarily the one this send targeted.
+            const tt = store.value.threads.find(th => th.id === targetThreadId);
+            if (tt) {
+              if (chunk.sessionId) tt.sessionId = chunk.sessionId;
+              // Only on success — a failed turn means the model never saw it.
+              if (opts.staticPreambleHash) tt.lastSentStaticHash = opts.staticPreambleHash;
+            }
+            // Local providers (ollama/openai) finish with an empty sessionId —
+            // never persist it, so their sends keep resolving to a null session
+            // (history replay) and the static preamble is always included.
+            if (chunk.sessionId) opts.onSessionId?.(chunk.sessionId);
+            finish();
+            break;
+          }
+          case 'error':
+            a.error = chunk.message;
+            a.done = true;
+            finish();
+            break;
+        }
+      });
     } catch (err) {
       console.error('[useAi] send error:', err);
       const a = getAssistant();
@@ -399,11 +460,71 @@ export function useAi() {
         a.done = true;
       }
     } finally {
-      unlisten();
-      inFlightRequestId.value = null;
       isSending.value = false;
     }
     return getAssistant();
+  }
+
+  /**
+   * Run a turn whose answer is for the app, not the user: nothing is written
+   * into the thread and the context meter is left alone, since the reading
+   * shown to the user should reflect their conversation rather than our
+   * housekeeping. Returns the assistant text, or throws on failure.
+   */
+  async function sendSilent(opts: SilentSendOpts): Promise<string> {
+    if (isSending.value) throw new Error('A send is already in flight');
+    isSending.value = true;
+    // The CLI agents still hold the conversation in their session, so they get
+    // the bare instruction; the local providers only know what we replay.
+    const isLocal = opts.cli === 'ollama' || opts.cli === 'openai';
+    const history = isLocal ? buildHistory(activeThread.value?.messages ?? []) : [];
+    let text = '';
+    let failure: string | null = null;
+    try {
+      await runStream(
+        { ...opts, preamble: '', turnContext: '', images: [], history },
+        (chunk, finish) => {
+          switch (chunk.kind) {
+            case 'text':
+              text += chunk.content;
+              break;
+            case 'done':
+              finish();
+              break;
+            case 'error':
+              failure = chunk.message;
+              finish();
+              break;
+          }
+        },
+      );
+    } finally {
+      isSending.value = false;
+    }
+    if (failure) throw new Error(failure);
+    return text.trim();
+  }
+
+  /**
+   * Fold everything before this point into `summary`. The marker carries the
+   * summary forward for local providers replaying history; the session id is
+   * dropped so the CLI agents start a session that no longer holds the raw
+   * turns, and the preamble hash with it so the fresh session is re-seeded.
+   */
+  function applyCompaction(summary: string) {
+    const t = activeThread.value;
+    const clamped = clampSummary(summary);
+    if (!t || !clamped) return;
+    const compactedCount = t.messages.length - 1 - lastCompactionIndex(t.messages);
+    t.messages.push({
+      role: 'compaction',
+      text: clamped,
+      compactedCount,
+      done: true,
+    });
+    t.sessionId = null;
+    t.lastSentStaticHash = null;
+    t.updatedAt = new Date().toISOString();
   }
 
   async function cancel() {
@@ -424,8 +545,17 @@ export function useAi() {
   return {
     messages,
     isSending,
+    isCompacting,
     inFlightRequestId,
     send,
+    sendSilent,
+    applyCompaction,
+    /** Summary of the newest compaction in the active thread, if any. */
+    lastCompactionSummary: computed<string | null>(() => {
+      const msgs = activeThread.value?.messages ?? [];
+      const idx = lastCompactionIndex(msgs);
+      return idx >= 0 ? msgs[idx].text : null;
+    }),
     cancel,
     clearMessages,
     pushAttachment,

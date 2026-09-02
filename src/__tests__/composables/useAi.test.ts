@@ -167,6 +167,42 @@ describe('useAi', () => {
     expect((calls[1][0] as { docContent?: string | null }).docContent).toBeNull();
   });
 
+  it('replays a compacted thread as the summary plus what followed it', async () => {
+    (aiCommands.send as unknown as { mockResolvedValue: (v: unknown) => void }).mockResolvedValue('req');
+
+    const { applyCompaction } = useAi();
+    await runTurn('ollama', 'first question', 'first answer');
+    applyCompaction('The user asked a first question.');
+    await runTurn('ollama', 'second question', 'second answer');
+    await runTurn('ollama', 'third question', 'third answer');
+
+    const thirdCall = (aiCommands.send as unknown as { mock: { calls: unknown[][] } }).mock.calls[2];
+    const req = thirdCall[0] as { history?: { role: string; content: string }[] };
+    expect(req.history?.map(h => h.role)).toEqual(['user', 'user', 'assistant']);
+    expect(req.history?.[0].content).toContain('The user asked a first question.');
+    // The turns the summary stands in for are gone from the wire.
+    expect(JSON.stringify(req.history)).not.toContain('first answer');
+    expect(req.history?.[1].content).toBe('second question');
+    expect(req.history?.[2].content).toBe('second answer');
+  });
+
+  it('retires the CLI session on compaction so the stale context is dropped', async () => {
+    (aiCommands.send as unknown as { mockResolvedValue: (v: unknown) => void }).mockResolvedValue('req');
+
+    const { applyCompaction, activeThread } = useAi();
+    await runTurn('claude', 'first question', 'first answer');
+    expect(activeThread.value?.sessionId).toBe('s1');
+
+    applyCompaction('Summary.');
+
+    expect(activeThread.value?.sessionId).toBeNull();
+    expect(activeThread.value?.lastSentStaticHash).toBeNull();
+    const msgs = activeThread.value?.messages ?? [];
+    const marker = msgs[msgs.length - 1];
+    expect(marker?.role).toBe('compaction');
+    expect(marker?.compactedCount).toBe(2);
+  });
+
   it('sends an empty history for claude (resumes via session id)', async () => {
     (aiCommands.send as unknown as { mockResolvedValue: (v: unknown) => void }).mockResolvedValue('req');
 

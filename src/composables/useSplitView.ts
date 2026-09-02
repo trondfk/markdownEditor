@@ -10,8 +10,8 @@ import { t } from '../i18n';
 import { EMPTY_TAB_CONTENT } from '../constants';
 
 const STORAGE_KEY = 'mermark-split-view';
-const MIN_SPLIT_RATIO = 0.2;
-const MAX_SPLIT_RATIO = 0.8;
+export const MIN_SPLIT_RATIO = 0.2;
+export const MAX_SPLIT_RATIO = 0.8;
 
 function loadSplitViewState(): SplitViewState {
   try {

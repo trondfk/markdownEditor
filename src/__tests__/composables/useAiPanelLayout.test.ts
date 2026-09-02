@@ -1,7 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { defineComponent, h } from 'vue';
 import { mount } from '@vue/test-utils';
-import { useAiPanelLayout } from '../../composables/useAiPanelLayout';
+import {
+  useAiPanelLayout,
+  MIN_AI_PANEL_WIDTH,
+  MIN_EDITOR_WIDTH,
+} from '../../composables/useAiPanelLayout';
 
 function setup(opts: {
   panelSide?: 'left' | 'right';
@@ -38,6 +42,8 @@ function setup(opts: {
 describe('useAiPanelLayout', () => {
   let originalRO: typeof ResizeObserver | undefined;
   beforeEach(() => {
+    // The pane width persists to localStorage, so each test must start clean.
+    localStorage.clear();
     originalRO = (globalThis as unknown as { ResizeObserver?: typeof ResizeObserver }).ResizeObserver;
     (globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver = class {
       observe() {}
@@ -58,26 +64,55 @@ describe('useAiPanelLayout', () => {
     wrapper.unmount();
   });
 
-  it('sideStyle right by default', () => {
+  it('dockedStyle pins the pane to its persisted width', () => {
     const { api, wrapper } = setup({ panelSide: 'right' });
-    expect(api.sideStyle.value.right).toBe('0');
-    expect(api.sideStyle.value.left).toBe('auto');
+    api.width.value = 500;
+    expect(api.dockedStyle.value.flex).toBe('0 0 500px');
     api.unmount();
     wrapper.unmount();
   });
 
-  it('sideStyle left when panelSide=left', () => {
-    const { api, wrapper } = setup({ panelSide: 'left' });
-    expect(api.sideStyle.value.left).toBe('0');
-    expect(api.sideStyle.value.right).toBe('auto');
-    api.unmount();
-    wrapper.unmount();
-  });
-
-  it('sideStyle empty in fullscreen', () => {
+  it('dockedStyle empty in fullscreen and when minimized', () => {
     const { api, wrapper } = setup({});
     api.fullscreen.value = true;
-    expect(api.sideStyle.value).toEqual({});
+    expect(api.dockedStyle.value).toEqual({});
+
+    api.fullscreen.value = false;
+    api.minimized.value = true;
+    expect(api.dockedStyle.value).toEqual({});
+
+    api.unmount();
+    wrapper.unmount();
+  });
+
+  it('resizing a right-docked pane measures from the right edge of the row', () => {
+    const { api, wrapper } = setup({ panelSide: 'right' });
+    api.resizeFromPointer(700, { left: 0, right: 1200, width: 1200 });
+    expect(api.width.value).toBe(500);
+    api.unmount();
+    wrapper.unmount();
+  });
+
+  it('resizing a left-docked pane measures from the left edge of the row', () => {
+    const { api, wrapper } = setup({ panelSide: 'left' });
+    api.resizeFromPointer(360, { left: 0, right: 1200, width: 1200 });
+    expect(api.width.value).toBe(360);
+    api.unmount();
+    wrapper.unmount();
+  });
+
+  it('resize clamps to the panel minimum', () => {
+    const { api, wrapper } = setup({ panelSide: 'left' });
+    api.resizeFromPointer(10, { left: 0, right: 1200, width: 1200 });
+    expect(api.width.value).toBe(MIN_AI_PANEL_WIDTH);
+    api.unmount();
+    wrapper.unmount();
+  });
+
+  it('resize always leaves room for the editor in a narrow window', () => {
+    const { api, wrapper } = setup({ panelSide: 'left' });
+    api.resizeFromPointer(900, { left: 0, right: 900, width: 900 });
+    expect(api.width.value).toBe(900 - MIN_EDITOR_WIDTH);
     api.unmount();
     wrapper.unmount();
   });

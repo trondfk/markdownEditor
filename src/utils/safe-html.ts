@@ -1,5 +1,10 @@
-const SAFE_TAGS = new Set(['p', 'strong', 'em', 'br', 'a', 'img', 'details', 'summary']);
+import { highlightStyle, normalizeHighlightColor } from './highlight-colors';
+
+const SAFE_TAGS = new Set(['p', 'strong', 'em', 'br', 'a', 'img', 'details', 'summary', 'mark']);
 const DROP_WITH_CONTENT = new Set(['script', 'style', 'iframe', 'object', 'embed', 'svg', 'math']);
+
+/** Allowlisted tags that may appear mid-sentence rather than as their own block. */
+const SAFE_INLINE_TAGS = ['strong', 'em', 'br', 'a', 'img', 'mark'];
 
 const safeUrl = (value: string): boolean => {
   const normalized = value.trim().replace(/[\u0000-\u0020]+/g, '');
@@ -79,7 +84,7 @@ export function safeHtmlRenderableTagSourceLines(raw: string): number[] {
 }
 
 export function safeHtmlInlineTagTokens(raw: string): SafeHtmlTagToken[] {
-  const inline = new Set(['strong', 'em', 'br', 'a', 'img']);
+  const inline = new Set(SAFE_INLINE_TAGS);
   const result: SafeHtmlTagToken[] = [];
   const dropped: string[] = [];
   for (const token of safeHtmlTagTokens(raw)) {
@@ -133,6 +138,16 @@ const copySafeAttributes = (source: Element, target: Element, tag: string) => {
     if (align && ['left', 'center', 'right', 'justify'].includes(align)) target.setAttribute('align', align);
   }
   if (tag === 'details' && source.hasAttribute('open')) target.setAttribute('open', '');
+  if (tag === 'mark') {
+    // Rebuild the style from a validated colour rather than copying it. The
+    // source attribute is untrusted document text, and this is the only route
+    // by which any style reaches the rendered output.
+    const color = normalizeHighlightColor(
+      source.getAttribute('data-color')
+      ?? (source instanceof HTMLElement ? source.style.backgroundColor : null),
+    );
+    if (color) target.setAttribute('style', highlightStyle(color));
+  }
   if (tag === 'a') {
     const href = source.getAttribute('href');
     if (href && safeUrl(href)) target.setAttribute('href', href);
@@ -189,7 +204,7 @@ export function isSafeInlineHtmlTag(raw: string): boolean {
   return tokens.length === 1
     && tokens[0].start === 0
     && tokens[0].end === raw.length
-    && ['strong', 'em', 'br', 'a', 'img'].includes(tokens[0].name);
+    && SAFE_INLINE_TAGS.includes(tokens[0].name);
 }
 
 /** Sanitize one inline tag by using the same DOM allowlist as block rendering. */
@@ -197,7 +212,7 @@ export function sanitizeSafeInlineHtmlTag(raw: string): string {
   if (!isSafeInlineHtmlTag(raw)) return '';
   if (/^<\//.test(raw)) {
     const tag = raw.match(/^<\/([a-z]+)/i)?.[1]?.toLowerCase();
-    return tag && ['strong', 'em', 'a'].includes(tag) ? `</${tag}>` : '';
+    return tag && ['strong', 'em', 'a', 'mark'].includes(tag) ? `</${tag}>` : '';
   }
   const tag = raw.match(/^<([a-z]+)/i)?.[1]?.toLowerCase();
   if (!tag) return '';

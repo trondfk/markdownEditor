@@ -11,7 +11,7 @@ const DEMO_MARKDOWN = [
   '',
   '<p align="center">',
   '  <strong>A fast, visual Markdown editor with full code control</strong><br>',
-  '  <a href="https://github.com/Vesperino/MerMarkEditor"><img src="https://img.shields.io/badge/MerMark-Open_Source-35c7bd" alt="MerMark"></a>',
+  '  <a href="https://github.com/trondfk/markdownEditor"><img src="https://img.shields.io/badge/MerMark-Open_Source-35c7bd" alt="MerMark"></a>',
   '</p>',
   '',
   '<details open>',

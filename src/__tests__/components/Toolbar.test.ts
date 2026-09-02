@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { mount } from '@vue/test-utils';
 import { ref } from 'vue';
 import Toolbar from '../../components/Toolbar.vue';
+import { HIGHLIGHT_COLORS } from '../../utils/highlight-colors';
 
 // Mock markdown converter
 vi.mock('../../utils/markdown-converter', () => ({
@@ -15,6 +16,9 @@ const createMockEditor = (options: {
   canRedo?: boolean;
   characterCount?: number;
   wordCount?: number;
+  highlightColor?: string | null;
+  setHighlight?: (attrs: { color: string }) => { run: () => void };
+  unsetHighlight?: () => { run: () => void };
 } = {}) => {
   const {
     isActive = () => false,
@@ -57,6 +61,8 @@ const createMockEditor = (options: {
         setLink: () => ({ run: vi.fn() }),
         unsetLink: () => ({ run: vi.fn() }),
         setImage: () => ({ run: vi.fn() }),
+        setHighlight: options.setHighlight ?? (() => ({ run: vi.fn() })),
+        unsetHighlight: options.unsetHighlight ?? (() => ({ run: vi.fn() })),
         run: vi.fn(),
       }),
     }),
@@ -64,7 +70,8 @@ const createMockEditor = (options: {
       focus: vi.fn(),
       insertMermaid: vi.fn(),
     },
-    getAttributes: () => ({ href: '' }),
+    getAttributes: (name?: string) =>
+      name === 'highlight' ? { color: options.highlightColor ?? null } : { href: '' },
     storage: {
       characterCount: {
         characters: () => characterCount,
@@ -557,6 +564,92 @@ describe('Toolbar Component', () => {
 
       // Test passes if no error is thrown
       expect(true).toBe(true);
+    });
+  });
+
+  describe('Highlight picker', () => {
+    // Dropdown visibility is module-scoped singleton state, so a test that
+    // leaves the picker open would change what the next test's
+    // `.dropdown-menu` lookup finds. Every test here closes it again.
+    const openPicker = async (wrapper: ReturnType<typeof mount>) => {
+      const button = wrapper.find('.highlight-btn');
+      if (wrapper.find('.highlight-menu').exists()) await button.trigger('click');
+      await button.trigger('click');
+      return button;
+    };
+
+    it('renders a swatch for every palette colour', async () => {
+      const wrapper = mount(Toolbar, {
+        global: { provide: { editor: createMockEditor() } },
+      });
+
+      const button = await openPicker(wrapper);
+      expect(wrapper.findAll('.highlight-swatch')).toHaveLength(HIGHLIGHT_COLORS.length);
+      await button.trigger('click');
+    });
+
+    it('applies the colour of the swatch that was clicked', async () => {
+      const run = vi.fn();
+      const setHighlight = vi.fn(() => ({ run }));
+      const wrapper = mount(Toolbar, {
+        global: { provide: { editor: createMockEditor({ setHighlight }) } },
+      });
+
+      await openPicker(wrapper);
+      await wrapper.findAll('.highlight-swatch')[1].trigger('click');
+
+      expect(setHighlight).toHaveBeenCalledWith({ color: HIGHLIGHT_COLORS[1].hex });
+      expect(run).toHaveBeenCalled();
+      // Choosing a colour closes the picker on its own.
+      expect(wrapper.find('.highlight-menu').exists()).toBe(false);
+    });
+
+    it('clears the highlight from the remove entry', async () => {
+      const run = vi.fn();
+      const unsetHighlight = vi.fn(() => ({ run }));
+      const wrapper = mount(Toolbar, {
+        global: { provide: { editor: createMockEditor({ unsetHighlight }) } },
+      });
+
+      await openPicker(wrapper);
+      const remove = wrapper.findAll('.highlight-menu .dropdown-item')[0];
+      await remove.trigger('click');
+
+      expect(unsetHighlight).toHaveBeenCalled();
+      expect(run).toHaveBeenCalled();
+    });
+
+    it('marks the button active while the cursor sits in a highlight', () => {
+      const wrapper = mount(Toolbar, {
+        global: {
+          provide: {
+            editor: createMockEditor({ isActive: (name) => name === 'highlight' }),
+          },
+        },
+      });
+
+      expect(wrapper.find('.highlight-btn').classes()).toContain('active');
+    });
+
+    it('ticks the swatch matching the colour under the cursor', async () => {
+      const wrapper = mount(Toolbar, {
+        global: {
+          provide: {
+            editor: createMockEditor({
+              isActive: (name) => name === 'highlight',
+              // The editor reports rgb, the palette is hex; the picker has to
+              // normalise before comparing or nothing would ever look active.
+              highlightColor: 'rgb(185, 246, 202)',
+            }),
+          },
+        },
+      });
+
+      const button = await openPicker(wrapper);
+      const active = wrapper.findAll('.highlight-swatch').filter(s => s.classes().includes('active'));
+      expect(active).toHaveLength(1);
+      expect(active[0].attributes('style')).toContain('185, 246, 202');
+      await button.trigger('click');
     });
   });
 

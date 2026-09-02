@@ -1,11 +1,15 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue';
+import { ref, computed, onMounted } from 'vue';
 import { writeTextFile } from '@tauri-apps/plugin-fs';
-import { useSplitView } from '../composables/useSplitView';
+import { useSplitView, MIN_SPLIT_RATIO, MAX_SPLIT_RATIO } from '../composables/useSplitView';
 import { useTabDrag } from '../composables/useTabDrag';
 import { useWindowManager } from '../composables/useWindowManager';
 import { htmlToMarkdown } from '../utils/markdown-converter';
+import { wouldTruncateDocument } from '../utils/save-guard';
+import { ratioFromPointer } from '../utils/resize';
+import type { Tab } from '../composables/useTabs';
 import EditorPane from './EditorPane.vue';
+import ResizeDivider from './ResizeDivider.vue';
 
 const {
   splitState,
@@ -35,6 +39,15 @@ const {
   transferTabToWindow,
 } = useWindowManager();
 
+const props = defineProps<{
+  /**
+   * Serializes a tab to markdown, or returns null when no mounted editor can
+   * supply its text. Injected because the mode state that decides this lives in
+   * App.vue.
+   */
+  getTabMarkdown?: (paneId: string, tab: Tab) => string | null;
+}>();
+
 const emit = defineEmits<{
   linkClick: [href: string];
   closeTabRequest: [paneId: string, tabId: string];
@@ -48,7 +61,6 @@ const emit = defineEmits<{
 
 const leftPaneRef = ref<InstanceType<typeof EditorPane> | null>(null);
 const rightPaneRef = ref<InstanceType<typeof EditorPane> | null>(null);
-const isDragging = ref(false);
 const containerRef = ref<HTMLDivElement | null>(null);
 
 onMounted(() => {
@@ -75,9 +87,21 @@ onMounted(() => {
       const pane = splitState.value.panes.find(p => p.id === paneId);
       const tab = pane?.tabs.find(t => t.id === tabId);
 
-      // Save file content before transfer
-      if (tab && tab.content) {
-        const markdownContent = htmlToMarkdown(tab.content).trimEnd();
+      // Save file content before transfer. tab.content is stale in code view and
+      // empty for markdown-first tabs, so go through the resolver.
+      if (tab) {
+        const source = props.getTabMarkdown
+          ? props.getTabMarkdown(paneId, tab)
+          : htmlToMarkdown(tab.content);
+        if (source === null) {
+          console.error('[transfer] no editor could supply content for', filePath);
+          return;
+        }
+        const markdownContent = source.trimEnd();
+        if (wouldTruncateDocument(markdownContent, tab.originalMarkdown)) {
+          console.error('[transfer] refused to empty', filePath);
+          return;
+        }
         await writeTextFile(filePath, markdownContent);
       }
 
@@ -137,31 +161,10 @@ const rightPaneStyle = computed(() => ({
   maxWidth: isSplitActive.value ? `${(1 - splitState.value.splitRatio) * 100}%` : '0',
 }));
 
-const startDrag = (event: MouseEvent) => {
-  event.preventDefault();
-  isDragging.value = true;
-  document.addEventListener('mousemove', onDrag);
-  document.addEventListener('mouseup', stopDrag);
-  document.body.style.cursor = 'col-resize';
-  document.body.style.userSelect = 'none';
-};
-
-const onDrag = (event: MouseEvent) => {
-  if (!isDragging.value || !containerRef.value) return;
-
-  const containerRect = containerRef.value.getBoundingClientRect();
-  const relativeX = event.clientX - containerRect.left;
-  const newRatio = relativeX / containerRect.width;
-
-  setSplitRatio(newRatio);
-};
-
-const stopDrag = () => {
-  isDragging.value = false;
-  document.removeEventListener('mousemove', onDrag);
-  document.removeEventListener('mouseup', stopDrag);
-  document.body.style.cursor = '';
-  document.body.style.userSelect = '';
+const onDividerResize = (clientX: number) => {
+  if (!containerRef.value) return;
+  const bounds = containerRef.value.getBoundingClientRect();
+  setSplitRatio(ratioFromPointer(clientX, bounds, MIN_SPLIT_RATIO, MAX_SPLIT_RATIO));
 };
 
 const handleSwitchTab = (paneId: string, tabId: string) => {
@@ -262,12 +265,6 @@ const getActiveEditor = () => {
   return paneRef?.editor ?? null;
 };
 
-onUnmounted(() => {
-  if (isDragging.value) {
-    stopDrag();
-  }
-});
-
 defineExpose({
   getEditorContent,
   setEditorContent,
@@ -286,7 +283,7 @@ defineExpose({
   <div
     ref="containerRef"
     class="split-container"
-    :class="{ dragging: isDragging, 'split-active': isSplitActive }"
+    :class="{ 'split-active': isSplitActive }"
   >
     <!-- Left Pane (always visible) -->
     <EditorPane
@@ -308,14 +305,7 @@ defineExpose({
     />
 
     <!-- Divider (only visible in split mode) -->
-    <div
-      v-if="isSplitActive"
-      class="split-divider"
-      :class="{ dragging: isDragging }"
-      @mousedown="startDrag"
-    >
-      <div class="divider-handle"></div>
-    </div>
+    <ResizeDivider v-if="isSplitActive" @resize="onDividerResize" />
 
     <!-- Right Pane (only in split mode) -->
     <EditorPane
@@ -347,44 +337,7 @@ defineExpose({
   min-height: 0;
 }
 
-.split-container.dragging {
-  cursor: col-resize;
-}
-
-.split-divider {
-  width: 6px;
-  background: var(--divider-bg);
-  cursor: col-resize;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  transition: background 0.15s ease;
-}
-
-.split-divider:hover,
-.split-divider.dragging {
-  background: var(--divider-hover);
-}
-
-.divider-handle {
-  width: 2px;
-  height: 40px;
-  background: var(--divider-handle);
-  border-radius: 1px;
-  transition: background 0.15s ease;
-}
-
-.split-divider:hover .divider-handle,
-.split-divider.dragging .divider-handle {
-  background: var(--divider-handle-hover);
-}
-
 @media print {
-  .split-divider {
-    display: none !important;
-  }
-
   .split-container {
     display: block;
   }

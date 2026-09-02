@@ -56,6 +56,7 @@ import {
   safeHtmlTagTokens,
   sanitizeSafeInlineHtmlTag,
 } from './safe-html';
+import { highlightStyle, normalizeHighlightColor } from './highlight-colors';
 
 const protectSafeHtmlBlocks = (source: string, protect: (raw: string) => string): string => {
   const lines = source.split('\n');
@@ -284,11 +285,23 @@ export function htmlToMarkdown(
   md = md.replace(/<del[^>]*>(.*?)<\/del>/gi, '~~$1~~');
   md = md.replace(/<strike[^>]*>(.*?)<\/strike>/gi, '~~$1~~');
 
+  // Highlights survive as inline HTML — Markdown has no syntax for them. The
+  // attributes are rewritten from a normalized colour rather than passed
+  // through, so the saved file never carries editor-specific styling and the
+  // hex stays byte-stable across repeated saves.
+  md = md.replace(/<mark([^>]*)>([\s\S]*?)<\/mark>/gi, (_, attrs: string, content: string) => {
+    const raw = attrs.match(/data-color\s*=\s*["']([^"']*)["']/i)?.[1]
+      ?? attrs.match(/background-color\s*:\s*([^;"']+)/i)?.[1];
+    const color = normalizeHighlightColor(raw);
+    return color
+      ? `<mark style="${highlightStyle(color)}">${content}</mark>`
+      : `<mark>${content}</mark>`;
+  });
+
   // Unsupported tags - strip but keep content
   md = md.replace(/<sup[^>]*>(.*?)<\/sup>/gi, '$1');
   md = md.replace(/<sub[^>]*>(.*?)<\/sub>/gi, '$1');
   md = md.replace(/<u[^>]*>(.*?)<\/u>/gi, '$1');
-  md = md.replace(/<mark[^>]*>(.*?)<\/mark>/gi, '$1');
 
   // Inline code
   md = md.replace(/<code(?:\s[^>]*)?>([\s\S]*?)<\/code>/gi, (_, content) => {

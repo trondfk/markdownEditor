@@ -30,11 +30,43 @@ pub const READ_FILE_CAP_BYTES: usize = 200 * 1024;
 pub const LIST_DIR_MAX_ENTRIES: usize = 500;
 
 /// Local models have far smaller context windows than the CLI agents, so we
-/// seed at most this many prior turns and HISTORY_MAX_CHARS of content. 20
-/// turns / 24000 chars (~6k tokens) is a conservative budget that leaves room
-/// for the preamble, the live prompt, and the tool loop on a small window.
+/// seed at most this many prior turns into a request.
 pub const HISTORY_MAX_TURNS: usize = 20;
+
+/// History budget when the provider's context window is unknown. The
+/// OpenAI-compatible chat endpoint does not report one, so 24000 chars
+/// (~6k tokens) stays conservative for the small models people run locally.
 pub const HISTORY_MAX_CHARS: usize = 24_000;
+
+/// Floor for a derived budget, so a tiny window still replays a turn or two
+/// instead of collapsing to the newest message alone.
+pub const HISTORY_MIN_CHARS: usize = 2_000;
+
+/// Characters per token assumed when converting a context window into a
+/// character budget. Pessimistic on purpose: Markdown carrying paths, code and
+/// non-Latin text tokenises worse than prose, and overshooting the window gets
+/// the oldest messages silently dropped by the server instead of by us.
+pub const CHARS_PER_TOKEN: usize = 2;
+
+/// Replayed history gets this fraction of the estimated character capacity.
+/// The remainder pays for the system preamble, the attached document, the live
+/// prompt, tool results and the model's own reply.
+const HISTORY_BUDGET_DIVISOR: usize = 4;
+
+/// Character budget for replayed history on this request. Derived from the
+/// context window when the provider tells us one (ollama sends `num_ctx`),
+/// otherwise the flat fallback.
+///
+/// Deriving it matters because the budget used to be fixed: on an 8k window a
+/// full 24000-char history alone claimed more than the whole context, so the
+/// server dropped the front of the request, preamble included.
+pub fn history_char_budget(num_ctx: Option<u64>) -> usize {
+    let Some(n) = num_ctx.filter(|n| *n > 0) else {
+        return HISTORY_MAX_CHARS;
+    };
+    let capacity = (n as usize).saturating_mul(CHARS_PER_TOKEN);
+    (capacity / HISTORY_BUDGET_DIVISOR).max(HISTORY_MIN_CHARS)
+}
 
 /// One prior conversation turn carried into a local-provider request. Only
 /// `user`/`assistant` text turns are sent (no tool_calls) so strict OpenAI
@@ -410,23 +442,27 @@ pub fn format_dir_listing(path: &str, mut entries: Vec<(String, bool)>) -> Strin
 pub const HISTORY_OMITTED_MARKER: &str = "[Earlier conversation turns omitted]";
 
 /// Select prior turns fitting the history budget, FIRST + RECENT: when nothing
-/// exceeds `HISTORY_MAX_TURNS` / `HISTORY_MAX_CHARS` the history passes through
+/// exceeds `HISTORY_MAX_TURNS` / `max_chars` the history passes through
 /// unchanged. When trimming kicks in, the FIRST user turn is always kept (it
 /// carries the task intent small models otherwise lose), one
 /// `HISTORY_OMITTED_MARKER` system turn marks the gap, and the most recent
 /// turns fill the remaining budget (first turn's chars and the two extra slots
 /// count against it). The newest turn is kept even if it alone busts the char
 /// budget — sending an empty history would be worse.
-pub fn trim_history(history: &[HistoryTurn]) -> Vec<HistoryTurn> {
+///
+/// This is the lossy fallback. The app compacts a long conversation into a
+/// summary before it gets here, so trimming should mostly bite on threads that
+/// grew fast within a single turn.
+pub fn trim_history(history: &[HistoryTurn], max_chars: usize) -> Vec<HistoryTurn> {
     let total_chars: usize = history.iter().map(|t| t.content.chars().count()).sum();
-    if history.len() <= HISTORY_MAX_TURNS && total_chars <= HISTORY_MAX_CHARS {
+    if history.len() <= HISTORY_MAX_TURNS && total_chars <= max_chars {
         return history.to_vec();
     }
 
     let first_idx = history.iter().position(|t| t.role == "user");
     let reserve = first_idx.map(|i| history[i].content.chars().count()).unwrap_or(0);
     let turn_budget = HISTORY_MAX_TURNS.saturating_sub(if first_idx.is_some() { 2 } else { 0 });
-    let char_budget = HISTORY_MAX_CHARS.saturating_sub(reserve);
+    let char_budget = max_chars.saturating_sub(reserve);
 
     let mut start = history.len();
     let mut count = 0usize;
@@ -898,7 +934,7 @@ mod tests {
     #[test]
     fn trim_history_keeps_all_when_under_caps() {
         let h = hist(&[("user", "a"), ("assistant", "b"), ("user", "c")]);
-        let kept = trim_history(&h);
+        let kept = trim_history(&h, HISTORY_MAX_CHARS);
         let contents: Vec<&str> = kept.iter().map(|t| t.content.as_str()).collect();
         assert_eq!(contents, vec!["a", "b", "c"]);
     }
@@ -912,7 +948,7 @@ mod tests {
             .iter()
             .map(|(r, c)| HistoryTurn { role: r.clone(), content: c.clone() })
             .collect();
-        let kept = trim_history(&h);
+        let kept = trim_history(&h, HISTORY_MAX_CHARS);
         assert_eq!(kept.len(), HISTORY_MAX_TURNS);
         assert_eq!(kept[0].content, "t0", "first user turn must be kept");
         assert_eq!(kept[1].role, "system");
@@ -933,7 +969,7 @@ mod tests {
             HistoryTurn { role: "assistant".into(), content: big },
             HistoryTurn { role: "user".into(), content: "newest".into() },
         ];
-        let kept = trim_history(&h);
+        let kept = trim_history(&h, HISTORY_MAX_CHARS);
         let contents: Vec<&str> = kept.iter().map(|t| t.content.as_str()).collect();
         assert_eq!(contents, vec!["intent", HISTORY_OMITTED_MARKER, "newest"]);
         assert_eq!(kept[1].role, "system");
@@ -951,13 +987,53 @@ mod tests {
             .iter()
             .map(|(r, c)| HistoryTurn { role: r.clone(), content: c.clone() })
             .collect();
-        let kept = trim_history(&h);
+        let kept = trim_history(&h, HISTORY_MAX_CHARS);
         assert!(kept.len() <= HISTORY_MAX_TURNS, "turn budget busted: {}", kept.len());
         let chars: usize = kept.iter().map(|t| t.content.chars().count()).sum();
         assert!(chars <= HISTORY_MAX_CHARS, "char budget busted: {}", chars);
         assert_eq!(kept[0].content, h[0].content);
         assert_eq!(kept[1].content, HISTORY_OMITTED_MARKER);
         assert_eq!(kept.last().unwrap().content, h.last().unwrap().content);
+    }
+
+    #[test]
+    fn history_budget_scales_with_the_context_window() {
+        // A quarter of num_ctx * CHARS_PER_TOKEN.
+        assert_eq!(history_char_budget(Some(32_768)), 16_384);
+        assert_eq!(history_char_budget(Some(8_192)), 4_096);
+    }
+
+    #[test]
+    fn history_budget_falls_back_flat_without_a_window() {
+        assert_eq!(history_char_budget(None), HISTORY_MAX_CHARS);
+        assert_eq!(history_char_budget(Some(0)), HISTORY_MAX_CHARS);
+    }
+
+    #[test]
+    fn history_budget_never_drops_below_the_floor() {
+        assert_eq!(history_char_budget(Some(512)), HISTORY_MIN_CHARS);
+    }
+
+    #[test]
+    fn trim_history_honours_a_derived_budget_smaller_than_the_flat_cap() {
+        // 8k window: the old fixed 24000-char budget would have passed all of
+        // this through and overflowed the window on its own.
+        let budget = history_char_budget(Some(8_192));
+        // Twelve turns stay under HISTORY_MAX_TURNS, so only the char budget
+        // can trim them — and 12000 chars is well under the flat 24000 cap.
+        let raw: Vec<HistoryTurn> = (0..12)
+            .map(|i| HistoryTurn {
+                role: if i % 2 == 0 { "user".into() } else { "assistant".into() },
+                content: format!("t{:02}{}", i, "z".repeat(997)),
+            })
+            .collect();
+        let kept = trim_history(&raw, budget);
+        assert!(kept.len() < raw.len(), "nothing was trimmed");
+        let chars: usize = kept.iter().map(|t| t.content.chars().count()).sum();
+        assert!(chars <= budget + HISTORY_OMITTED_MARKER.len(), "busted budget: {}", chars);
+        assert_eq!(kept[0].content, raw[0].content, "first user turn must survive");
+        assert_eq!(kept[1].content, HISTORY_OMITTED_MARKER);
+        assert_eq!(kept.last().unwrap().content, raw.last().unwrap().content);
     }
 
     #[test]
@@ -969,7 +1045,7 @@ mod tests {
             .iter()
             .map(|(r, c)| HistoryTurn { role: r.clone(), content: c.clone() })
             .collect();
-        let kept = trim_history(&h);
+        let kept = trim_history(&h, HISTORY_MAX_CHARS);
         assert_eq!(kept.len(), HISTORY_MAX_TURNS);
         assert!(kept.iter().all(|t| t.role == "assistant"));
         assert_eq!(kept.last().unwrap().content, format!("a{}", HISTORY_MAX_TURNS + 2));

@@ -1,13 +1,17 @@
 <script setup lang="ts">
+import { useI18n } from '../i18n';
+
 defineProps<{
   message?: string;
 }>();
+
+const { t } = useI18n();
 </script>
 
 <template>
   <div class="loading-overlay">
     <div class="loading-spinner"></div>
-    <p>{{ message || 'Otwieranie pliku...' }}</p>
+    <p>{{ message || t.openingFile }}</p>
   </div>
 </template>
 

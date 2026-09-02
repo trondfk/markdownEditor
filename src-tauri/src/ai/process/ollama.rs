@@ -38,7 +38,7 @@ fn normalize_base(raw: Option<&str>) -> String {
 fn build_chat_body(req: &AiSendRequest, num_ctx: u64) -> serde_json::Value {
     serde_json::json!({
         "model": req.model.clone().unwrap_or_default(),
-        "messages": initial_messages(req),
+        "messages": initial_messages(req, num_ctx),
         "stream": true,
         "options": { "num_ctx": num_ctx },
     })
@@ -48,12 +48,16 @@ fn build_chat_body(req: &AiSendRequest, num_ctx: u64) -> serde_json::Value {
 /// turns (user/assistant alternating), then the fresh document attachment (when
 /// sent), then the live user message (per-turn context joined with the prompt).
 /// The tool loop accumulates intra-turn messages on top of this seed.
-fn initial_messages(req: &AiSendRequest) -> Vec<serde_json::Value> {
+///
+/// `num_ctx` is the window actually being requested (already capped at the
+/// model's trained context), so the history budget is scaled to what the server
+/// will really allocate rather than to what the user typed in settings.
+fn initial_messages(req: &AiSendRequest, num_ctx: u64) -> Vec<serde_json::Value> {
     let mut messages = Vec::new();
     if !req.preamble.is_empty() {
         messages.push(serde_json::json!({ "role": "system", "content": req.preamble }));
     }
-    for turn in file_tools::trim_history(&req.history) {
+    for turn in file_tools::trim_history(&req.history, file_tools::history_char_budget(Some(num_ctx))) {
         messages.push(serde_json::json!({ "role": turn.role, "content": turn.content }));
     }
     if let Some(doc) = crate::ai::process::doc_attachment_message(req) {
@@ -209,7 +213,7 @@ async fn run_tool_loop(
 ) {
     let url = format!("{}/api/chat", base_url(&req));
     let client = crate::ai::process::http_client(None);
-    let mut messages = initial_messages(&req);
+    let mut messages = initial_messages(&req, num_ctx);
 
     for round in 0..file_tools::MAX_TOOL_ROUNDS {
         let body = serde_json::json!({
@@ -519,12 +523,12 @@ mod tests {
 
     #[test]
     fn initial_messages_seeds_system_and_user() {
-        let msgs = initial_messages(&req_with(None, Some("llama3"), "sys"));
+        let msgs = initial_messages(&req_with(None, Some("llama3"), "sys"), 8192);
         assert_eq!(msgs.len(), 2);
         assert_eq!(msgs[0]["role"], "system");
         assert_eq!(msgs[1]["role"], "user");
 
-        let no_preamble = initial_messages(&req_with(None, None, ""));
+        let no_preamble = initial_messages(&req_with(None, None, ""), 8192);
         assert_eq!(no_preamble.len(), 1);
         assert_eq!(no_preamble[0]["role"], "user");
     }
@@ -532,7 +536,7 @@ mod tests {
     #[test]
     fn initial_messages_seeds_history_between_system_and_prompt() {
         let history = vec![turn("user", "h0"), turn("assistant", "h1")];
-        let msgs = initial_messages(&req_with_history(None, Some("llama3"), "sys", history));
+        let msgs = initial_messages(&req_with_history(None, Some("llama3"), "sys", history), 8192);
         assert_eq!(msgs.len(), 4);
         assert_eq!(msgs[0]["role"], "system");
         assert_eq!(msgs[1]["role"], "user");
@@ -546,7 +550,7 @@ mod tests {
     #[test]
     fn initial_messages_no_preamble_starts_with_history() {
         let history = vec![turn("user", "h0"), turn("assistant", "h1")];
-        let msgs = initial_messages(&req_with_history(None, None, "", history));
+        let msgs = initial_messages(&req_with_history(None, None, "", history), 8192);
         assert_eq!(msgs.len(), 3);
         assert_eq!(msgs[0]["role"], "user");
         assert_eq!(msgs[0]["content"], "h0");
@@ -559,7 +563,7 @@ mod tests {
     fn initial_messages_joins_turn_context_into_user_message() {
         let mut req = req_with(None, Some("llama3"), "sys");
         req.turn_context = "Pinned #1: ctx".into();
-        let msgs = initial_messages(&req);
+        let msgs = initial_messages(&req, 8192);
         assert_eq!(msgs.len(), 2);
         assert_eq!(msgs[1]["role"], "user");
         assert_eq!(msgs[1]["content"], "Pinned #1: ctx\n\nhello");
@@ -570,7 +574,7 @@ mod tests {
         let history = vec![turn("user", "h0"), turn("assistant", "h1")];
         let mut req = req_with_history(None, Some("llama3"), "sys", history);
         req.doc_content = Some("# Doc\nbody".into());
-        let msgs = initial_messages(&req);
+        let msgs = initial_messages(&req, 8192);
         assert_eq!(msgs.len(), 5);
         assert_eq!(msgs[3]["role"], "system");
         let content = msgs[3]["content"].as_str().unwrap();
@@ -582,12 +586,12 @@ mod tests {
 
     #[test]
     fn initial_messages_skips_doc_attachment_when_none_or_empty() {
-        let msgs = initial_messages(&req_with(None, Some("llama3"), "sys"));
+        let msgs = initial_messages(&req_with(None, Some("llama3"), "sys"), 8192);
         assert_eq!(msgs.len(), 2);
 
         let mut req = req_with(None, Some("llama3"), "sys");
         req.doc_content = Some(String::new());
-        let msgs = initial_messages(&req);
+        let msgs = initial_messages(&req, 8192);
         assert_eq!(msgs.len(), 2);
         assert_eq!(msgs[1]["role"], "user");
     }

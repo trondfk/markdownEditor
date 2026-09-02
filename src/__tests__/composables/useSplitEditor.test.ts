@@ -26,7 +26,11 @@ Object.defineProperty(globalThis, 'localStorage', {
   value: localStorageMock,
 });
 
-import { useSplitEditor } from '../../composables/useSplitEditor';
+import {
+  useSplitEditor,
+  MIN_SPLIT_EDITOR_RATIO,
+  MAX_SPLIT_EDITOR_RATIO,
+} from '../../composables/useSplitEditor';
 
 describe('useSplitEditor', () => {
   beforeEach(() => {
@@ -215,6 +219,49 @@ describe('useSplitEditor', () => {
       );
 
       splitEditorActive.value = false;
+    });
+  });
+
+  describe('splitEditorRatio', () => {
+    it('starts at an even split', () => {
+      const { splitEditorRatio } = useSplitEditor();
+      expect(splitEditorRatio.value).toBe(0.5);
+    });
+
+    it('clamps the ratio so neither side can collapse', () => {
+      const { splitEditorRatio, setSplitEditorRatio } = useSplitEditor();
+
+      setSplitEditorRatio(0.05);
+      expect(splitEditorRatio.value).toBe(MIN_SPLIT_EDITOR_RATIO);
+
+      setSplitEditorRatio(0.95);
+      expect(splitEditorRatio.value).toBe(MAX_SPLIT_EDITOR_RATIO);
+
+      setSplitEditorRatio(0.5);
+    });
+
+    it('persists the ratio so it survives leaving Code + Preview', async () => {
+      const { setSplitEditorRatio } = useSplitEditor();
+
+      setSplitEditorRatio(0.35);
+      await nextTick();
+
+      expect(localStorageMock.setItem).toHaveBeenCalledWith(
+        'mermark-split-editor-ratio',
+        '0.35',
+      );
+
+      setSplitEditorRatio(0.5);
+    });
+
+    it('is shared across composable instances', () => {
+      const a = useSplitEditor();
+      const b = useSplitEditor();
+
+      a.setSplitEditorRatio(0.42);
+      expect(b.splitEditorRatio.value).toBe(0.42);
+
+      a.setSplitEditorRatio(0.5);
     });
   });
 });

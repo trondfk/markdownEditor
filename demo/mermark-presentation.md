@@ -15,61 +15,61 @@ style: section { font-size: 32px; }
 
 # MerMark
 
-## Markdown, jakim powinien być
-*WYSIWYG • Mermaid • Multi-LLM • Eksport PDF / DOCX / Marp*
+## Markdown as it should be
+*WYSIWYG • Mermaid • Multi-LLM • PDF / DOCX / Marp export*
 
 ---
 
 ![bg right:52%](screens/01-visual.png)
 
-# Czym jest MerMark
-- Edytor Markdown z prawdziwym **WYSIWYG** (TipTap)
-- Podgląd renderowany na żywo
-- Aplikacja desktopowa: **Tauri + Vue 3**
-- Lekka, szybka, offline
+# What MerMark is
+- A Markdown editor with real **WYSIWYG** (TipTap)
+- Preview rendered live
+- Desktop app: **Tauri + Vue 3**
+- Light, fast, offline
 
 ---
 
 ![bg left:55%](screens/02-code-preview.png)
 
-# Kod i podgląd obok siebie
-- Tryb **Code + Preview** — źródło i render równolegle
-- Diagramy **Mermaid** renderowane w locie
-- Bloki kodu z kolorowaniem składni
-- Tabele, przypisy, footnotes
+# Code and preview side by side
+- **Code + Preview** mode, source and render in parallel
+- **Mermaid** diagrams rendered on the fly
+- Code blocks with syntax highlighting
+- Tables and footnotes
 
 ---
 
 ![bg right:54%](screens/03-toc.png)
 
-# Spis treści na żywo
-- Automatyczny **Table of Contents** z nagłówków
-- Hierarchia H1 / H2 / H3
-- Sekcja **Footnotes**
-- Klik → skok do sekcji
+# Live table of contents
+- Automatic **table of contents** built from the headings
+- H1 / H2 / H3 hierarchy
+- A **Footnotes** section
+- Click to jump to a section
 
 ---
 
 ![bg left:55%](screens/04-tokens.png)
 
-# Liczenie tokenów multi-LLM
-- Licznik znaków, słów i **tokenów**
-- Przełączanie modelu:
+# Multi-LLM token counting
+- Counts characters, words and **tokens**
+- Switch model:
   - **GPT** (OpenAI)
   - **Claude** (Anthropic)
   - **Gemini** (Google)
-- Wiesz, ile zapłacisz, zanim wkleisz
+- Know the cost before you paste
 
 ---
 
 ![bg right:55%](screens/05-marp-dialog.png)
 
-# Eksport i prezentacje
-- **PDF**, **DOCX** — jednym kliknięciem
-- Nowość: **Prezentacja Marp**
-  - tryb pełnoekranowy ⛶
-  - auto-przejście ▶ / strzałki / klik
-- Z dokumentu do slajdów bez kopiowania
+# Export and presentations
+- **PDF** and **DOCX** in one click
+- New: **Marp presentation**
+  - fullscreen mode ⛶
+  - auto-advance ▶, arrow keys, click
+- From document to slides without copying
 
 ---
 
@@ -77,7 +77,7 @@ style: section { font-size: 32px; }
 
 ![bg opacity:.2](screens/02-code-preview.png)
 
-# To jest meta
-*Ta prezentacja powstała w MerMark.*
+# This is meta
+*This presentation was made in MerMark.*
 
-**Napisz. Zobacz. Zaprezentuj.**
+**Write it. See it. Present it.**

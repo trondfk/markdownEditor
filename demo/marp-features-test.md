@@ -8,57 +8,57 @@ color: #e6edf3
 
 <!-- _class: lead -->
 
-# Marp — test funkcji
+# Marp, feature test
 
-Deck do sprawdzenia trybu Marp w MerMark:
-granice slajdów, dyrektywy, tła lokalne + z sieci.
+A deck for exercising Marp mode in MerMark:
+slide boundaries, directives, local and remote backgrounds.
 
 ---
 
-# Zwykły slajd
+# An ordinary slide
 
-- Wypunktowanie
-- **Pogrubienie**, *kursywa*, `kod`
-- Tabela i blok kodu niżej
+- A bullet list
+- **Bold**, *italic*, `code`
+- Table and code block below
 
-| Funkcja | Status |
+| Feature | Status |
 | ------- | ------ |
 | Badge   | ✅     |
-| Chipy   | ✅     |
+| Chips   | ✅     |
 
 ---
 
 <!-- _class: invert -->
 
-# Slajd „invert"
+# The "invert" slide
 
-Dyrektywa `_class: invert` → odwrócony motyw na tym slajdzie.
+The `_class: invert` directive flips the theme on this slide only.
 
 ```ts
-export const hello = (n: string) => `Cześć, ${n}!`;
+export const hello = (n: string) => `Hello, ${n}!`;
 ```
 
 ---
 
 ![bg left:45%](assets/fable-lab.png)
 
-# Tło lokalne
+# Local background
 
-Po lewej plik z dysku (`assets/fable-lab.png`) —
-inline'owany do data-URI przy Prezentuj.
+On the left, a file from disk (`assets/fable-lab.png`),
+inlined to a data URI when you hit Present.
 
 ---
 
-![bg right:50%](https://placehold.co/1300x1600/11331f/d7ffe9?text=z+sieci)
+![bg right:50%](https://placehold.co/1300x1600/11331f/d7ffe9?text=from+the+web)
 
-# Tło z internetu
+# Background from the web
 
-Po prawej obraz z `placehold.co` — ładuje się po sieci w podglądzie.
+On the right, an image from `placehold.co`, fetched over the network in the preview.
 
 ---
 
 <!-- _class: lead -->
 
-# Koniec testu
+# End of test
 
-Slajdy oddzielone, dyrektywy jako chipy, mix obrazów.
+Slides separated, directives shown as chips, a mix of images.

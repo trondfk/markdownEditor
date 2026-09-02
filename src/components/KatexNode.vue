@@ -187,7 +187,7 @@ onMounted(render);
   border-radius: 3px;
 }
 
-/* 浮動工具列：絕對定位，平時隱藏，hover 才顯示 */
+/* Floating toolbar: absolutely positioned, hidden until the node is hovered. */
 .katex-actions {
   position: absolute;
   top: -2px;

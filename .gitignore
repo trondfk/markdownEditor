@@ -3,6 +3,7 @@ node_modules/
 
 # Local manual test files
 test-files/
+.cursor/
 
 # Build outputs
 dist/

@@ -10,6 +10,8 @@ const { t } = useI18n();
 const props = defineProps<{
   messages: AiMessageType[];
   isSending: boolean;
+  /** Sending, but for the summarization round rather than the user's turn. */
+  isCompacting: boolean;
   emptyHint: string;
   emptyKeyHint: string;
   cliConnected: boolean;
@@ -52,7 +54,7 @@ function messageHasFence(text: string): boolean {
       <span class="ai-msg__thinking-dot" />
       <span class="ai-msg__thinking-dot" />
       <span class="ai-msg__thinking-dot" />
-      <span>{{ t.aiWorkingPlease }}</span>
+      <span>{{ isCompacting ? t.aiCompacting : t.aiWorkingPlease }}</span>
     </div>
   </div>
 </template>

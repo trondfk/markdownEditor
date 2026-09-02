@@ -3,8 +3,8 @@
 Workspace folders, a brand-new Minimal theme, AI editing for Mermaid diagrams, a near-WYSIWYG PDF export — the editor finally feels like a place you can stay in for hours, not just a quick-note tool.
 
 <p>
-  <img src="https://raw.githubusercontent.com/Vesperino/MerMarkEditor/master/docs/release-notes/v0.2.6/ui-light-mode.png" alt="MerMark v0.2.4 — Minimal theme, workspace sidebar, document open" width="48%" />
-  <img src="https://raw.githubusercontent.com/Vesperino/MerMarkEditor/master/docs/release-notes/v0.2.6/ui-with-ai-panel.png" alt="MerMark v0.2.4 — same layout with the AI Assistant docked on the right" width="48%" />
+  <img src="https://raw.githubusercontent.com/trondfk/markdownEditor/main/docs/release-notes/v0.2.6/ui-light-mode.png" alt="MerMark v0.2.4 — Minimal theme, workspace sidebar, document open" width="48%" />
+  <img src="https://raw.githubusercontent.com/trondfk/markdownEditor/main/docs/release-notes/v0.2.6/ui-with-ai-panel.png" alt="MerMark v0.2.4 — same layout with the AI Assistant docked on the right" width="48%" />
 </p>
 
 ## Workspaces

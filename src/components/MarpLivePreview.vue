@@ -2,6 +2,7 @@
 import { ref, watch, onMounted } from 'vue';
 import { Marp } from '@marp-team/marp-core';
 import { renderDeck } from '../composables/useMarpExport';
+import { t } from '../i18n';
 
 const props = defineProps<{ markdown: string }>();
 
@@ -23,7 +24,7 @@ function render() {
     body = deck.html;
     css = deck.css;
   } catch {
-    body = '<p style="padding:16px;color:#a33">Nie udało się wyrenderować slajdów.</p>';
+    body = `<p style="padding:16px;color:#a33">${t.value.marpRenderFailed}</p>`;
   }
   // Marp renders each slide as a block <svg>; stack them with spacing and make
   // them responsive to the pane width. The deck CSS (incl. any author `style:`

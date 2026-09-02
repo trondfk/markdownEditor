@@ -102,7 +102,7 @@ describe('useAutoUpdate', () => {
     await checkForUpdates();
 
     expect(fetchMock).toHaveBeenCalledWith(
-      expect.stringContaining('api.github.com/repos/Vesperino/MerMarkEditor/releases/tags/v0.1.72'),
+      expect.stringContaining('api.github.com/repos/trondfk/markdownEditor/releases/tags/v0.1.72'),
     );
     expect(updateInfo.value?.notes).toBe('From GitHub API');
   });

@@ -15,6 +15,7 @@ import { useAiToolToast } from '../../composables/useAiToolToast';
 import { useAiPinnedSelections } from '../../composables/useAiPinnedSelections';
 import { useAiPendingImages, type PendingImage } from '../../composables/useAiPendingImages';
 import { buildDocAttachment, buildStaticPreamble, buildTurnContext, hashPreamble, shouldSendStaticPreamble, type PreambleOptions } from '../../composables/useAiPreamble';
+import { buildSummaryPrompt, shouldCompact } from '../../utils/ai-compaction';
 import { useAiMermaidTarget, extractMermaidCodeFromResponse } from '../../composables/useAiMermaidTarget';
 import { withWorkspaceReadAccess } from '../../composables/useAiWorkspaceContext';
 import { buildMermaidBlockFor } from '../../utils/mermaid-formats';
@@ -28,6 +29,7 @@ import AiPanelComposer from './AiPanelComposer.vue';
 import AiAttachmentModal from './AiAttachmentModal.vue';
 import AiImagePreview from './AiImagePreview.vue';
 import AiToolToast from './AiToolToast.vue';
+import ResizeDivider from '../ResizeDivider.vue';
 
 const props = defineProps<{
   open: boolean;
@@ -44,7 +46,6 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   close: [];
-  layoutChange: [side: 'left' | 'right' | null];
   applyContent: [content: string];
   showDiff: [orig: string, candidate: string];
   linkClick: [url: string];
@@ -163,12 +164,21 @@ const layout = useAiPanelLayout({
   },
 });
 
+/** Non-null only while the panel is docked, i.e. actually occupying a column. */
 const reservedSide = computed<'left' | 'right' | null>(() => {
   if (!props.open || !settings.value.ai.enabled) return null;
   return layout.reservedSide.value;
 });
 
-watch(reservedSide, (side) => emit('layoutChange', side), { immediate: true });
+const panelRef = ref<HTMLElement | null>(null);
+
+// The divider drags against the flex row the pane shares with the editor, so
+// the usable range tracks the window rather than a hard-coded maximum.
+function onDividerResize(clientX: number) {
+  const row = panelRef.value?.parentElement;
+  if (!row) return;
+  layout.resizeFromPointer(clientX, row.getBoundingClientRect());
+}
 
 const availableClis = computed<CliKind[]>(() => {
   const out: CliKind[] = [];
@@ -286,9 +296,17 @@ function effectiveAccessMap() {
   return withWorkspaceReadAccess(access.current.value, props.workspaceRoot ?? '');
 }
 
-function preambleOptions(): PreambleOptions {
+function preambleOptions(sessionIdToSend: string | null = null): PreambleOptions {
   const localeKey = (typeof navigator !== 'undefined' && (localStorage.getItem('mermark-locale') ?? 'en')) || 'en';
+  const isLocal = selectedCli.value === 'ollama' || selectedCli.value === 'openai';
+  // The CLI agents lose the compacted turns with their session, so the summary
+  // rides along on the first turn of the replacement session. Local providers
+  // replay it as history instead and must not receive it twice.
+  const compactionSummary = !isLocal && !sessionIdToSend
+    ? ai.lastCompactionSummary.value ?? undefined
+    : undefined;
   return {
+    compactionSummary,
     pins: pins.includePinned.value
       ? pins.pinnedSelections.value.map(p => ({ id: p.id, text: p.text }))
       : [],
@@ -359,7 +377,7 @@ async function onSend() {
     }
   }
 
-  const opts = preambleOptions();
+  const opts = preambleOptions(sessionIdToSend);
   const docAttachment = buildDocAttachment(selectedCli.value, docMarkdown.value, settings.value.ai.ollamaNumCtx);
   const turnContext = [buildTurnContext(opts), docAttachment.omittedNote ?? '']
     .filter(Boolean)
@@ -408,6 +426,52 @@ async function onSend() {
       const code = extractMermaidCodeFromResponse(lastMsg.text, resolveMermaidReadFormats(settings.value));
       if (code) aiMermaid.pushCandidate(code);
     }
+  }
+
+  await maybeCompact();
+}
+
+/**
+ * Fold the conversation into a summary once the window is nearly full, so the
+ * next turn has room instead of the user being told to start over. Runs after
+ * the reply has landed: the user reads their answer while we tidy up, and a
+ * failure here costs nothing but the space we hoped to free.
+ */
+async function maybeCompact() {
+  if (!shouldCompact({
+    fraction: ai.aiContext.usage.value.fraction,
+    empty: ai.aiContext.usage.value.empty,
+    messages: ai.messages.value,
+  })) return;
+
+  ai.isCompacting.value = true;
+  try {
+    const summary = await ai.sendSilent({
+      cli: selectedCli.value,
+      // Summarising inside the live session lets the CLI agents read the turns
+      // they still hold; applyCompaction retires the session straight after.
+      sessionId: (session.current.value && session.current.value.cli === selectedCli.value)
+        ? session.current.value.sessionId
+        : null,
+      model: selectedModel.value,
+      effort: selectedEffort.value,
+      prompt: buildSummaryPrompt(),
+      accessMap: effectiveAccessMap()!,
+      workDir: props.workDir,
+    });
+    if (!summary) return;
+    ai.applyCompaction(summary);
+    session.startNew();
+    // The meter reads the last turn, which was the pre-compaction one. Leaving
+    // it would keep the "nearly full" warning up over context we just freed;
+    // the next turn reports the real figure for the shortened conversation.
+    ai.aiContext.reset(selectedCli.value);
+  } catch (e) {
+    // Leave the thread untouched — the next send still works, just without the
+    // headroom, and the context bar keeps warning.
+    console.warn('[AiPanel] compaction failed, keeping full history:', e);
+  } finally {
+    ai.isCompacting.value = false;
   }
 }
 
@@ -497,15 +561,25 @@ function onPreviewImage(img: PendingImage) {
     @restore="layout.minimized.value = false"
   />
 
+  <ResizeDivider
+    v-if="reservedSide !== null"
+    class="ai-panel-divider"
+    :class="{ 'ai-panel-divider--left': reservedSide === 'left' }"
+    :aria-label="t.aiPanelTitle"
+    @resize="onDividerResize"
+  />
+
   <aside
+    ref="panelRef"
     v-if="props.open && settings.ai.enabled && !layout.minimized.value"
     class="ai-panel"
     :class="{
       'ai-panel--fullscreen': layout.fullscreen.value,
+      'ai-panel--docked': reservedSide !== null,
       'ai-panel--left': settings.ai.panelSide === 'left' && !layout.fullscreen.value,
       'ai-panel--above-fullscreen': mermaidEditMode,
     }"
-    :style="layout.sideStyle.value"
+    :style="layout.dockedStyle.value"
   >
     <AiPanelHeader
       :cli="selectedCli"
@@ -587,6 +661,7 @@ function onPreviewImage(img: PendingImage) {
     <AiPanelMessages
       :messages="ai.messages.value"
       :is-sending="ai.isSending.value"
+      :is-compacting="ai.isCompacting.value"
       :empty-hint="t.aiEmptyHint"
       :empty-key-hint="t.aiEmptyKeyHint"
       :cli-connected="cliConnected"
@@ -653,27 +728,35 @@ function onPreviewImage(img: PendingImage) {
 
 <style scoped>
 .ai-panel {
-  position: fixed;
-  top: var(--toolbar-height, 44px);
-  bottom: 0;
-  width: var(--ai-panel-width, 420px);
   background: var(--bg-primary);
   color: var(--text-primary);
-  border-left: 1px solid var(--border-primary);
   display: flex;
   flex-direction: column;
-  z-index: 100;
-  box-shadow: var(--shadow-lg);
+  min-width: 0;
+  min-height: 0;
 }
-.ai-panel--left {
-  border-left: none;
-  border-right: 1px solid var(--border-primary);
+/* Docked: an ordinary flex sibling of the editor area, sized by dockedStyle.
+   `order` puts it on the configured side without re-mounting the component,
+   which would otherwise drop the in-flight chat when the side is switched. */
+.ai-panel--docked {
+  order: 2;
+  overflow: hidden;
+}
+.ai-panel--docked.ai-panel--left {
+  order: -2;
+}
+.ai-panel-divider {
+  order: 1;
+}
+.ai-panel-divider--left {
+  order: -1;
 }
 .ai-panel--fullscreen {
+  position: fixed;
   top: 0; left: 0; right: 0; bottom: 0;
-  width: auto;
   border: none;
   border-radius: 0;
+  z-index: 100;
 }
 /* When bound to a mermaid edit target, the diagram fullscreen overlay
    (z-index 99999) would otherwise sit on top of the panel and tab. Bump
@@ -681,6 +764,11 @@ function onPreviewImage(img: PendingImage) {
 .ai-panel--above-fullscreen,
 .ai-panel-tab--above-fullscreen {
   z-index: 100000;
+}
+/* A docked pane sits in normal flow, where z-index alone does nothing. Give it
+   a stacking context so the bump above actually takes effect. */
+.ai-panel--docked.ai-panel--above-fullscreen {
+  position: relative;
 }
 .ai-panel-mermaid-chip {
   display: flex;

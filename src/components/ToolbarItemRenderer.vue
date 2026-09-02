@@ -78,6 +78,11 @@ const {
   setLink,
   insertImageFromUrl,
   insertImageFromFile,
+  showHighlightMenu,
+  highlightColors,
+  currentHighlightColor,
+  setHighlight,
+  unsetHighlight,
   showTokenMenu,
   insertMermaid,
   insertFootnote,
@@ -88,8 +93,9 @@ const {
 const needsEditor = (id: string) => {
   const editorItems = [
     'undo', 'redo', 'heading-select', 'bold', 'italic', 'strikethrough', 'inline-code',
-    'bullet-list', 'ordered-list', 'task-list', 'blockquote', 'code-block', 'horizontal-rule',
-    'page-break', 'link', 'image', 'table', 'mermaid', 'footnote', 'math-inline', 'math-block',
+    'highlight', 'bullet-list', 'ordered-list', 'task-list', 'blockquote', 'code-block',
+    'horizontal-rule', 'page-break', 'link', 'image', 'table', 'mermaid', 'footnote',
+    'math-inline', 'math-block',
   ];
   return editorItems.includes(id);
 };
@@ -265,6 +271,37 @@ const showLabel = (id: string) => {
       <polyline points="8,6 2,12 8,18"/>
     </svg>
   </button>
+
+  <div v-else-if="itemId === 'highlight'" class="toolbar-group dropdown-container">
+    <button
+      @click="showHighlightMenu = !showHighlightMenu"
+      :class="{ active: isActive('highlight') }"
+      class="toolbar-btn icon-only highlight-btn"
+      v-tooltip="t.highlightTooltip"
+      :disabled="isDisabled(itemId)"
+    >
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 20h9"/>
+        <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/>
+      </svg>
+      <span class="highlight-swatch-bar" :style="{ background: currentHighlightColor ?? 'transparent' }"></span>
+    </button>
+    <div v-if="showHighlightMenu" class="dropdown-menu highlight-menu" :class="{ 'dropdown-up': dropdownDirection === 'up', 'dropdown-right': dropdownDirection === 'right' }">
+      <div class="highlight-swatches">
+        <button
+          v-for="color in highlightColors"
+          :key="color.id"
+          class="highlight-swatch"
+          :class="{ active: currentHighlightColor === color.hex }"
+          :style="{ background: color.hex }"
+          :aria-label="t.highlightColorLabel(color.id)"
+          v-tooltip="t.highlightColorLabel(color.id)"
+          @click="setHighlight(color.hex)"
+        ></button>
+      </div>
+      <button class="dropdown-item" @click="unsetHighlight">{{ t.highlightRemove }}</button>
+    </div>
+  </div>
 
   <!-- Lists -->
   <button v-else-if="itemId === 'bullet-list'" @click="runCommand(e => e.chain().focus().toggleBulletList().run())" :class="{ active: isActive('bulletList') }" class="toolbar-btn icon-only" v-tooltip="t.bulletList" :disabled="isDisabled(itemId)">
@@ -770,6 +807,41 @@ const showLabel = (id: string) => {
 .dropdown-item:hover:not(:disabled) { background: var(--hover-bg); color: var(--text-primary); }
 .dropdown-item:disabled { opacity: 0.4; cursor: not-allowed; }
 .dropdown-item.danger { color: var(--danger); }
+
+/* Highlight picker */
+.highlight-menu { min-width: 0; }
+
+/* Anchors the colour bar drawn under the pen icon. */
+.highlight-btn { position: relative; }
+
+.highlight-swatches {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
+  padding: 4px;
+}
+
+.highlight-swatch {
+  width: 28px;
+  height: 28px;
+  border-radius: 4px;
+  border: 1px solid var(--border-primary);
+  cursor: pointer;
+  padding: 0;
+}
+.highlight-swatch:hover { transform: scale(1.08); }
+.highlight-swatch.active { outline: 2px solid var(--active-border); outline-offset: 1px; }
+
+/* Sits under the pen icon so the button itself shows the colour in play. */
+.highlight-swatch-bar {
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  bottom: 3px;
+  height: 3px;
+  border-radius: 2px;
+  pointer-events: none;
+}
 .dropdown-item.danger:hover:not(:disabled) { background: var(--danger-text-bg); }
 
 .dropdown-divider { height: 1px; background: var(--border-primary); margin: 4px 0; }

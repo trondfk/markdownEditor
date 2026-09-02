@@ -7,10 +7,10 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Vesperino/MerMarkEditor/releases"><img src="https://img.shields.io/github/v/release/Vesperino/MerMarkEditor?style=flat" alt="Release"></a>
-  <a href="https://github.com/Vesperino/MerMarkEditor/blob/master/LICENSE"><img src="https://img.shields.io/github/license/Vesperino/MerMarkEditor?style=flat" alt="License"></a>
-  <a href="https://github.com/Vesperino/MerMarkEditor/stargazers"><img src="https://img.shields.io/github/stars/Vesperino/MerMarkEditor?style=flat" alt="Stars"></a>
-  <a href="https://github.com/Vesperino/MerMarkEditor/releases"><img src="https://img.shields.io/github/downloads/Vesperino/MerMarkEditor/total?style=flat&color=brightgreen&cacheSeconds=300" alt="Downloads"></a>
+  <a href="https://github.com/trondfk/markdownEditor/releases"><img src="https://img.shields.io/github/v/release/trondfk/markdownEditor?style=flat" alt="Release"></a>
+  <a href="https://github.com/trondfk/markdownEditor/blob/main/LICENSE"><img src="https://img.shields.io/github/license/trondfk/markdownEditor?style=flat" alt="License"></a>
+  <a href="https://github.com/trondfk/markdownEditor/stargazers"><img src="https://img.shields.io/github/stars/trondfk/markdownEditor?style=flat" alt="Stars"></a>
+  <a href="https://github.com/trondfk/markdownEditor/releases"><img src="https://img.shields.io/github/downloads/trondfk/markdownEditor/total?style=flat&color=brightgreen&cacheSeconds=300" alt="Downloads"></a>
   <a href="https://buymeacoffee.com/vesperinio"><img src="https://img.shields.io/badge/Buy_me_a_coffee-FFDD00?style=flat&logo=buy-me-a-coffee&logoColor=black" alt="Buy me a coffee"></a>
 </p>
 
@@ -24,11 +24,9 @@
   <a href="#development">Development</a>
 </p>
 
-<p align="center">
-  <strong>English</strong> •
-  <a href="README_PL.md">Polski</a> •
-  <a href="README_ZH.md">中文</a>
-</p>
+---
+
+> **This is a fork.** MerMark Editor was created by [Vesperino](https://github.com/Vesperino) — the original project lives at [Vesperino/MerMarkEditor](https://github.com/Vesperino/MerMarkEditor) and is MIT licensed. This repository is maintained independently by [trondfk](https://github.com/trondfk); releases here are built, signed and updated separately from upstream.
 
 ---
 
@@ -48,8 +46,8 @@
 - **Cross-platform** - Available on Windows, macOS and Linux
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/Vesperino/MerMarkEditor/master/docs/release-notes/v0.2.6/ui-light-mode.png" alt="MerMark — Minimal theme with workspace sidebar" width="48%" />
-  <img src="https://raw.githubusercontent.com/Vesperino/MerMarkEditor/master/docs/release-notes/v0.2.6/ui-with-ai-panel.png" alt="MerMark — same layout with the AI Assistant docked on the right" width="48%" />
+  <img src="https://raw.githubusercontent.com/trondfk/markdownEditor/main/docs/release-notes/v0.2.6/ui-light-mode.png" alt="MerMark — Minimal theme with workspace sidebar" width="48%" />
+  <img src="https://raw.githubusercontent.com/trondfk/markdownEditor/main/docs/release-notes/v0.2.6/ui-with-ai-panel.png" alt="MerMark — same layout with the AI Assistant docked on the right" width="48%" />
 </p>
 
 ---
@@ -74,7 +72,7 @@ Turn any note into a slide deck. Start a **Marp presentation** from the New menu
 If you already pay for **Claude Code** or **OpenAI Codex** — or both — MerMark plugs that subscription straight into the editor. The AI panel speaks to the `claude` and `codex` CLIs you already have logged in, so every request goes through the account you're already paying for. No API key to generate. No second bill. No proxy sitting between you and your provider.
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/Vesperino/MerMarkEditor/master/docs/release-notes/v0.2.0/ai-panel-overview.png" alt="AI panel overview" />
+  <img src="https://raw.githubusercontent.com/trondfk/markdownEditor/main/docs/release-notes/v0.2.0/ai-panel-overview.png" alt="AI panel overview" />
   <br>
   <em>AI panel docked next to the editor with model picker, threads dropdown, pinned fragments and live context bar</em>
 </p>
@@ -127,7 +125,7 @@ Run your own model server? Pick **OpenAI-compatible** as the provider and point 
 - Sent images stay in chat history as thumbnails so you remember what you passed.
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/Vesperino/MerMarkEditor/master/docs/release-notes/v0.2.0/pin-multi-fragments.png" alt="Pinning multiple fragments" />
+  <img src="https://raw.githubusercontent.com/trondfk/markdownEditor/main/docs/release-notes/v0.2.0/pin-multi-fragments.png" alt="Pinning multiple fragments" />
   <br>
   <em>Pin multiple highlighted fragments before sending — each appears as a numbered chip in the composer</em>
 </p>
@@ -140,7 +138,7 @@ Run your own model server? Pick **OpenAI-compatible** as the provider and point 
 - Covers Read, Edit, Write, Bash, WebFetch, codex shell — all of them.
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/Vesperino/MerMarkEditor/master/docs/release-notes/v0.2.0/tool-chips.png" alt="Tool call chips" />
+  <img src="https://raw.githubusercontent.com/trondfk/markdownEditor/main/docs/release-notes/v0.2.0/tool-chips.png" alt="Tool call chips" />
   <br>
   <em>Every tool the AI uses (Read, Edit, Write, Bash, WebFetch, ...) shows up inline as an expandable chip</em>
 </p>
@@ -161,13 +159,13 @@ Run your own model server? Pick **OpenAI-compatible** as the provider and point 
 - Append-only audit log of every AI action, viewable in Settings.
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/Vesperino/MerMarkEditor/master/docs/release-notes/v0.2.0/access-map.png" alt="Access map editor" />
+  <img src="https://raw.githubusercontent.com/trondfk/markdownEditor/main/docs/release-notes/v0.2.0/access-map.png" alt="Access map editor" />
   <br>
   <em>Per-document access map — explicit read / write paths plus tool toggles</em>
 </p>
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/Vesperino/MerMarkEditor/master/docs/release-notes/v0.2.0/snapshots.png" alt="Snapshot history" />
+  <img src="https://raw.githubusercontent.com/trondfk/markdownEditor/main/docs/release-notes/v0.2.0/snapshots.png" alt="Snapshot history" />
   <br>
   <em>Snapshot history — restore, pin, export or delete pre-edit revisions</em>
 </p>
@@ -237,7 +235,7 @@ The full feature list — including snapshot rotation, tmp-recovery on crashed s
 - **Character / word / line / token counters** as a single movable unit
 - **Styled prompt / confirm dialogs** throughout (no native browser modals)
 - **Auto-save** — never lose your work
-- **Trilingual UI** - English, Polish and Chinese interface
+- **Bilingual UI** - English and Norwegian interface
 - **Keyboard shortcuts modal** - Quick reference for all shortcuts (`Ctrl+/`)
 
 ### Advanced Features
@@ -340,13 +338,13 @@ The full feature list — including snapshot rotation, tmp-recovery on crashed s
 
 ### Download
 
-Download the latest version from the [Releases page](https://github.com/Vesperino/MerMarkEditor/releases).
+Download the latest version from the [Releases page](https://github.com/trondfk/markdownEditor/releases).
 
 | Platform | Download |
 |----------|----------|
-| Windows  | [.exe / .msi installer](https://github.com/Vesperino/MerMarkEditor/releases/latest) |
-| macOS    | [.dmg (universal: Apple Silicon + Intel)](https://github.com/Vesperino/MerMarkEditor/releases/latest) |
-| Linux    | [.deb / .AppImage](https://github.com/Vesperino/MerMarkEditor/releases/latest) |
+| Windows  | [.exe / .msi installer](https://github.com/trondfk/markdownEditor/releases/latest) |
+| macOS    | [.dmg (universal: Apple Silicon + Intel)](https://github.com/trondfk/markdownEditor/releases/latest) |
+| Linux    | [.deb / .AppImage](https://github.com/trondfk/markdownEditor/releases/latest) |
 
 ### Important Note
 
@@ -449,8 +447,8 @@ This creates a flowchart:
 
 ```bash
 # Clone the repository
-git clone https://github.com/Vesperino/MerMarkEditor.git
-cd MerMarkEditor
+git clone https://github.com/trondfk/markdownEditor.git
+cd markdownEditor
 
 # Install dependencies
 pnpm install

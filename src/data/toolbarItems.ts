@@ -53,6 +53,7 @@ export const TOOLBAR_ITEMS: ToolbarItemDef[] = [
   { id: 'italic', category: 'text-format', defaultZone: 'toolbar', defaultOrder: 310, needsEditor: true, labelKey: 'italic' },
   { id: 'strikethrough', category: 'text-format', defaultZone: 'toolbar', defaultOrder: 320, needsEditor: true, labelKey: 'strikethrough' },
   { id: 'inline-code', category: 'text-format', defaultZone: 'toolbar', defaultOrder: 330, needsEditor: true, labelKey: 'inlineCode' },
+  { id: 'highlight', category: 'text-format', defaultZone: 'toolbar', defaultOrder: 340, needsEditor: true, labelKey: 'highlight' },
 
   // Lists
   { id: 'bullet-list', category: 'lists', defaultZone: 'toolbar', defaultOrder: 400, needsEditor: true, labelKey: 'bulletList' },

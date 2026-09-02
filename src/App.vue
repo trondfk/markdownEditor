@@ -37,16 +37,25 @@ import AiFirstRunTooltip from './components/ai/AiFirstRunTooltip.vue';
 import AiTmpRecoveryModal from './components/ai/AiTmpRecoveryModal.vue';
 import ToastNotification from './components/ToastNotification.vue';
 import FileConflictModal from './components/FileConflictModal.vue';
+import ResizeDivider from './components/ResizeDivider.vue';
 
 // Composables
 import { useAutoUpdate } from './composables/useAutoUpdate';
 import { useCodeView } from './composables/useCodeView';
-import { useSplitEditor } from './composables/useSplitEditor';
+import {
+  useSplitEditor,
+  MIN_SPLIT_EDITOR_RATIO,
+  MAX_SPLIT_EDITOR_RATIO,
+} from './composables/useSplitEditor';
 import { useScrollSync } from './composables/useScrollSync';
 import { useSettings } from './composables/useSettings';
 import { useSplitView } from './composables/useSplitView';
+import type { Tab } from './composables/useTabs';
+import { useTabSerializer } from './composables/useTabSerializer';
 import { useFileOperations } from './composables/useFileOperations';
 import { useCloseConfirmation } from './composables/useCloseConfirmation';
+import { wouldTruncateDocument } from './utils/save-guard';
+import { ratioFromPointer } from './utils/resize';
 import { useWindowManager } from './composables/useWindowManager';
 import { useTabDrag } from './composables/useTabDrag';
 import { useEditorZoom } from './composables/useEditorZoom';
@@ -165,6 +174,41 @@ const getEditorContent = () => {
   }
   return '<p></p>';
 };
+
+/**
+ * Markdown for the active tab when something other than the WYSIWYG editor owns
+ * the text, or null when the WYSIWYG editor is the source of truth.
+ *
+ * Code view, the split editor and large-file mode each unmount SplitContainer,
+ * so reading its HTML in those modes yields the empty-document placeholder.
+ * Every write path must consult this first.
+ */
+const getActiveMarkdownOverride = (): string | null => {
+  // eslint-disable-next-line @typescript-eslint/no-use-before-define
+  if (splitEditorActive.value) {
+    // eslint-disable-next-line @typescript-eslint/no-use-before-define
+    return splitSourceTabId.value === activeTabId.value ? splitMarkdownSource.value : null;
+  }
+  // eslint-disable-next-line @typescript-eslint/no-use-before-define
+  if (codeView.value) return codeContent.value;
+  // eslint-disable-next-line @typescript-eslint/no-use-before-define
+  if (largeFileVisualMode.value) {
+    return (
+      // eslint-disable-next-line @typescript-eslint/no-use-before-define
+      lazyMarkdownEditorRef.value?.getMarkdown() ?? activeTab.value?.pendingMarkdown ?? null
+    );
+  }
+  return null;
+};
+
+const { getTabMarkdown } = useTabSerializer({
+  activeTabId,
+  activePaneId,
+  getActiveMarkdownOverride,
+  getMountedEditorHtml: () => splitContainerRef.value?.getActiveEditorContent() ?? null,
+  // eslint-disable-next-line @typescript-eslint/no-use-before-define
+  isMarkdownFirst: (tab: Tab) => isMarkdownFirst(tab),
+});
 
 const setEditorContent = (content: string) => {
   if (splitContainerRef.value) {
@@ -479,19 +523,7 @@ const {
   createNewTab,
   switchToTab,
   getEditorHtml: getEditorContent,
-  // eslint-disable-next-line @typescript-eslint/no-use-before-define
-  getMarkdownOverride: () => {
-    // eslint-disable-next-line @typescript-eslint/no-use-before-define
-    if (splitEditorActive.value) {
-      // eslint-disable-next-line @typescript-eslint/no-use-before-define
-      return splitSourceTabId.value === activeTabId.value ? splitMarkdownSource.value : null;
-    }
-    // eslint-disable-next-line @typescript-eslint/no-use-before-define
-    if (codeView.value) return codeContent.value;
-    return largeFileVisualMode.value
-      ? lazyMarkdownEditorRef.value?.getMarkdown() ?? activeTab.value?.pendingMarkdown ?? null
-      : null;
-  },
+  getMarkdownOverride: getActiveMarkdownOverride,
   setEditorContent,
   markSaveStart: (filePath: string) => markSaveStart(filePath),
   markSaveEnd: (filePath: string, content: string) => markSaveEnd(filePath, content),
@@ -587,13 +619,7 @@ async function openMarpDialog() {
   marpTitle.value = fileName.replace(/\.(md|markdown)$/i, '') || 'deck';
   // In code / split-editor modes the WYSIWYG editor is unmounted and serializes
   // to empty — read the live markdown source instead so Present isn't blank.
-  // eslint-disable-next-line @typescript-eslint/no-use-before-define
-  const override = splitEditorActive.value
-    // eslint-disable-next-line @typescript-eslint/no-use-before-define
-    ? (splitSourceTabId.value === activeTabId.value ? splitMarkdownSource.value : null)
-    // eslint-disable-next-line @typescript-eslint/no-use-before-define
-    : (codeView.value ? codeContent.value : null);
-  const raw = override ?? htmlToMarkdown(getEditorContent() ?? '');
+  const raw = getActiveMarkdownOverride() ?? htmlToMarkdown(getEditorContent() ?? '');
   // Inline local images as data URIs: the deck renders inside a sandboxed
   // iframe (srcdoc) with no base URL, so relative/local paths won't load.
   const baseDir = tab?.filePath ? getDirectoryFromFilePath(tab.filePath) : undefined;
@@ -864,11 +890,28 @@ const {
   splitEditorActive,
   markdownSource: splitMarkdownSource,
   previewHtml: splitPreviewHtml,
+  splitEditorRatio,
+  setSplitEditorRatio,
   onMarkdownInput: onSplitMarkdownInput,
   syncFromVisual: syncSplitFromVisual,
   enter: enterSplitEditorRaw,
   exit: exitSplitEditor,
 } = useSplitEditor();
+
+const splitEditorPanesRef = ref<HTMLElement | null>(null);
+
+const splitEditorCodeStyle = computed(() => ({
+  flex: `0 0 ${splitEditorRatio.value * 100}%`,
+}));
+
+function onSplitEditorResize(clientX: number) {
+  const el = splitEditorPanesRef.value;
+  if (!el) return;
+  const rect = el.getBoundingClientRect();
+  setSplitEditorRatio(
+    ratioFromPointer(clientX, rect, MIN_SPLIT_EDITOR_RATIO, MAX_SPLIT_EDITOR_RATIO),
+  );
+}
 
 // Proportional scroll-sync between the split code pane and the live preview.
 const scrollSync = useScrollSync();
@@ -1135,10 +1178,7 @@ const {
   closeDiffPreview,
 } = useDiffPreview({
   originalMarkdown: computed(() => activeTab.value?.originalMarkdown ?? null),
-  getCurrentMarkdown: () => {
-    const html = getEditorContent();
-    return htmlToMarkdown(html);
-  },
+  getCurrentMarkdown: () => getActiveMarkdownOverride() ?? htmlToMarkdown(getEditorContent()),
   hasChanges,
 });
 
@@ -1186,16 +1226,13 @@ const showSettingsModal = ref(false);
 
 // ============ AI Panel ============
 const aiPanelOpen = ref(false);
-const aiPanelReservedSide = ref<'left' | 'right' | null>(null);
 
 function toggleAiPanel() {
   aiPanelOpen.value = !aiPanelOpen.value;
-  if (!aiPanelOpen.value) aiPanelReservedSide.value = null;
 }
 
 function closeAiPanel() {
   aiPanelOpen.value = false;
-  aiPanelReservedSide.value = null;
 }
 
 // Auto-open the panel whenever a Mermaid node registers an AI edit target.
@@ -1234,7 +1271,9 @@ function onAiShowDiff(_orig: string, candidate: string) {
 
 // Compute panel inputs from the active tab.
 const aiDocPath = computed(() => activeTab.value?.filePath ?? '');
-const aiDocContent = computed(() => getEditorContent() ?? '');
+// The AI can write to disk, so it must never be handed the empty-document
+// placeholder the unmounted WYSIWYG editor returns in code / split / large-file mode.
+const aiDocContent = computed(() => getActiveMarkdownOverride() ?? getEditorContent() ?? '');
 // Re-evaluate selection on every render tick so the AI panel sees the
 // current editor/code-view selection.
 const aiSelectionTick = ref(0);
@@ -1526,10 +1565,10 @@ const {
   handleCancel,
 } = useCloseConfirmation({
   tabs,
-  activeTabId,
-  getEditorHtml: getEditorContent,
+  getTabMarkdown: (tab: Tab) => getTabMarkdown(activePaneId.value, tab),
   switchToTab,
   syncActiveTabContent,
+  onSaveFailed: (tab: Tab) => showToastNotification(t.value.saveFailed(tab.fileName), 'warning'),
 });
 
 // ============ Auto-save ============
@@ -1541,11 +1580,14 @@ const saveTabFromPane = async (paneId: string, tabId: string) => {
   const tab = pane?.tabs.find(t => t.id === tabId);
   if (!tab?.filePath || !tab?.hasChanges) return;
 
+  // No mounted editor can speak for this tab right now (e.g. the timer was armed
+  // in visual mode and fired after a switch to code view). Stay dirty and retry
+  // rather than writing the empty-document placeholder over the file.
+  const source = getTabMarkdown(paneId, tab);
+  if (source === null) return;
+
   try {
-    // For active tab in active pane, get fresh content from editor; for others, use stored content
-    const isActiveTab = tabId === activeTabId.value && paneId === activePaneId.value;
-    const html = isActiveTab ? getEditorContent() : tab.content;
-    let markdown = htmlToMarkdown(html).trimEnd();
+    let markdown = source.trimEnd();
 
     // Preserve original line endings
     if (tab.originalMarkdown) {
@@ -1554,16 +1596,22 @@ const saveTabFromPane = async (paneId: string, tabId: string) => {
       markdown = markdown.trimEnd();
     }
 
+    if (wouldTruncateDocument(markdown, tab.originalMarkdown)) {
+      console.error('[auto-save] refused to empty', tab.filePath);
+      return;
+    }
+
     markSaveStart(tab.filePath);
     await writeTextFile(tab.filePath, markdown);
     markSaveEnd(tab.filePath, markdown);
 
-    // Update tab state
+    // Update tab state. tab.content is left alone: EditorPane keeps it current,
+    // and overwriting it here is what turned a bad serialization into a blank
+    // on-screen document.
     tab.hasChanges = false;
-    tab.content = html;
     tab.originalMarkdown = markdown;
   } catch (error) {
-    console.error('Błąd automatycznego zapisywania:', error);
+    console.error('Auto-save failed:', error);
   }
 };
 
@@ -1880,7 +1928,7 @@ onMounted(async () => {
     unlistenCloseRequest = await setupCloseHandler();
     console.log('[App] Close handler set up successfully');
   } catch (error) {
-    console.error('[App] Błąd konfiguracji obsługi zamknięcia:', error);
+    console.error('[App] Failed to set up the close handler:', error);
   }
 
   // Check for file path from URL query parameters (for new windows created via drag)
@@ -1896,7 +1944,7 @@ onMounted(async () => {
       openFileWithCrossWindowCheck(event.payload);
     });
   } catch (error) {
-    console.error('Błąd nasłuchiwania zdarzeń:', error);
+    console.error('Failed to listen for open-file events:', error);
   }
 
   if (urlFilePath) {
@@ -1914,7 +1962,7 @@ onMounted(async () => {
         setTimeout(() => openFileWithCrossWindowCheck(filePath), 100);
       }
     } catch (error) {
-      console.error('Błąd pobierania ścieżki pliku:', error);
+      console.error('Failed to read the file path to open:', error);
     }
   }
 
@@ -1956,7 +2004,7 @@ onMounted(async () => {
       openFileWithCrossWindowCheck(payload.file_path);
     });
   } catch (error) {
-    console.error('Błąd nasłuchiwania transferu kart:', error);
+    console.error('Failed to listen for tab transfers:', error);
   }
 
   // Listen for focus-file events (when another window asks us to focus a file)
@@ -1971,7 +2019,7 @@ onMounted(async () => {
       }
     });
   } catch (error) {
-    console.error('Błąd nasłuchiwania focus-file:', error);
+    console.error('Failed to listen for focus-file events:', error);
   }
 
   // Listen for file drag & drop onto the window
@@ -2018,7 +2066,7 @@ onMounted(async () => {
       },
     );
   } catch (error) {
-    console.error('Błąd nasłuchiwania drag-drop:', error);
+    console.error('Failed to listen for drag-and-drop events:', error);
   }
 
   // Enable change detection after editor stabilizes
@@ -2118,13 +2166,7 @@ onUnmounted(async () => {
     />
 
     <!-- Main content area with optional left bar -->
-    <div
-      class="main-area"
-      :class="{
-        'main-area--reserve-ai-left': aiPanelReservedSide === 'left',
-        'main-area--reserve-ai-right': aiPanelReservedSide === 'right',
-      }"
-    >
+    <div class="main-area">
       <!-- Workspace Sidebar (folder browser).
            Visible whenever the sidebar toggle is on — the sidebar renders an
            empty-state CTA when no workspace is open yet. -->
@@ -2177,13 +2219,14 @@ onUnmounted(async () => {
           @switch-tab="switchToTabFromSplitEditor"
           @close-tab="closeTabFromSplitEditor"
         />
-        <div class="split-editor-panes">
-          <div class="split-editor-code">
+        <div ref="splitEditorPanesRef" class="split-editor-panes">
+          <div class="split-editor-code" :style="splitEditorCodeStyle">
             <CodeEditor
               :model-value="splitMarkdownSource"
               @update:model-value="handleSplitMarkdownInput"
             />
           </div>
+          <ResizeDivider :aria-label="t.splitEditor" @resize="onSplitEditorResize" />
           <div class="split-editor-preview">
             <Editor
               :model-value="splitPreviewHtml"
@@ -2239,6 +2282,7 @@ onUnmounted(async () => {
         <!-- Split Container with Editor Panes -->
         <SplitContainer
           ref="splitContainerRef"
+          :get-tab-markdown="getTabMarkdown"
           @link-click="handleLinkClick"
           @close-tab-request="handleCloseTabRequest"
           @changes-updated="handleChangesUpdated"
@@ -2275,6 +2319,25 @@ onUnmounted(async () => {
           />
         </div>
       </template>
+
+      <!-- AI Assistant Panel. A flex sibling of the editor area, so it docks
+           and resizes like any other pane; it only leaves the flow to go
+           fullscreen or to collapse into its edge tab. -->
+      <AiPanel
+        v-if="aiPanelOpen"
+        :open="aiPanelOpen"
+        :doc-path="aiDocPath"
+        :doc-content="aiDocContent"
+        :selection-range="aiSelectionRange"
+        :selection-text="aiSelectionText"
+        :work-dir="aiWorkDir"
+        :workspace-name="aiWorkspaceName"
+        :workspace-root="aiWorkspaceRoot"
+        @close="closeAiPanel"
+        @apply-content="onAiApplyContent"
+        @show-diff="onAiShowDiff"
+        @link-click="handleLinkClick"
+      />
     </div>
 
     <!-- Status Bar (configurable) -->
@@ -2419,25 +2482,6 @@ onUnmounted(async () => {
       @close="documentSearch.close"
     />
 
-    <!-- AI Assistant Panel (fixed overlay; reports whether main content should
-         reserve its width while the panel is neither minimized nor fullscreen) -->
-    <AiPanel
-      v-if="aiPanelOpen"
-      :open="aiPanelOpen"
-      :doc-path="aiDocPath"
-      :doc-content="aiDocContent"
-      :selection-range="aiSelectionRange"
-      :selection-text="aiSelectionText"
-      :work-dir="aiWorkDir"
-      :workspace-name="aiWorkspaceName"
-      :workspace-root="aiWorkspaceRoot"
-      @close="closeAiPanel"
-      @layout-change="aiPanelReservedSide = $event"
-      @apply-content="onAiApplyContent"
-      @show-diff="onAiShowDiff"
-      @link-click="handleLinkClick"
-    />
-
     <!-- AI First-run tooltip (auto-shows once) -->
     <AiFirstRunTooltip @open-settings="showSettingsModal = true" />
 
@@ -2522,7 +2566,6 @@ onUnmounted(async () => {
 
 <style scoped>
 .app {
-  --ai-panel-width: 420px;
   display: flex;
   flex-direction: column;
   height: 100vh;
@@ -2536,21 +2579,12 @@ onUnmounted(async () => {
   min-height: 0;
 }
 
-/* Keep the fixed AI panel from covering editor content. AiPanel reports no
-   reserved side while minimized, fullscreen, disabled, or closed. */
-.main-area--reserve-ai-right {
-  padding-right: var(--ai-panel-width);
-}
-
-.main-area--reserve-ai-left {
-  padding-left: var(--ai-panel-width);
-}
-
 .editor-area {
   display: flex;
   flex: 1;
   overflow: hidden;
   min-height: 0;
+  min-width: 0;
 }
 
 /* Marp live preview: editor (left) + rendered slides (right), each ~half. */
@@ -2571,6 +2605,7 @@ onUnmounted(async () => {
   flex: 1;
   overflow: hidden;
   min-height: 0;
+  min-width: 0;
 }
 
 .large-editor-body {
@@ -2586,6 +2621,7 @@ onUnmounted(async () => {
   flex: 1;
   overflow: hidden;
   min-height: 0;
+  min-width: 0;
 }
 
 .split-editor-panes {
@@ -2595,18 +2631,22 @@ onUnmounted(async () => {
   overflow: hidden;
 }
 
+/* The code side is sized from the persisted ratio; the preview takes the rest. */
+.split-editor-code {
+  flex: 0 0 50%;
+}
+
+.split-editor-preview {
+  flex: 1 1 0;
+}
+
 .split-editor-code,
 .split-editor-preview {
-  flex: 1 1 50%;
   min-width: 0;
   min-height: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
-}
-
-.split-editor-code {
-  border-right: 1px solid var(--border-primary);
 }
 
 .split-editor-preview {

@@ -1,56 +1,56 @@
-# Matematyka w MerMark Editor
+# Math in MerMark Editor
 
-Dokument demonstracyjny i zestaw przykładów do sprawdzenia widoku wizualnego, zapisu Markdown, slajdów Marp oraz wydruku PDF. Wzór można edytować dwuklikiem lub klawiszem Enter po ustawieniu na nim fokusu. Enter zapisuje wzór w tekście, Ctrl+Enter zapisuje blok, Escape anuluje edycję. Przyciski 𝑥² i ∑ w pasku narzędzi wstawiają nowe wzory.
+A demonstration document and a set of examples for checking the visual view, the Markdown output, Marp slides and PDF printing. A formula can be edited by double-clicking it, or by pressing Enter while it has focus. Enter saves an inline formula, Ctrl+Enter saves a block, Escape cancels the edit. The 𝑥² and ∑ buttons in the toolbar insert new formulas.
 
-## 1. Warianty zapisu
+## 1. Notation variants
 
-W tekście, dolary: $E=mc^2$.
+Inline, dollars: $E=mc^2$.
 
-W tekście, nawiasy LaTeX: \(U=RI\).
+Inline, LaTeX parentheses: \(U=RI\).
 
-Wariant GitHub z backtickami: $`a^2+b^2=c^2`$.
+GitHub variant with backticks: $`a^2+b^2=c^2`$.
 
-Dolary blokowe w jednej linii:
+Block dollars on one line:
 
 $$P=UI$$
 
-Dolary blokowe w wielu liniach:
+Block dollars across several lines:
 
 $$
 Z=R+j\omega L
 $$
 
-Nawiasy kwadratowe LaTeX:
+LaTeX square brackets:
 
 \[
 Y=\frac{1}{Z}
 \]
 
-Blok `math`:
+A `math` block:
 
 ```math
 f_0=\frac{1}{2\pi\sqrt{LC}}
 ```
 
-Blok `latex` z tyldami:
+A `latex` block with tildes:
 
 ~~~latex
 \omega_0=2\pi f_0
 ~~~
 
-Blok `tex` z czterema backtickami:
+A `tex` block with four backticks:
 
 ````tex
 Q=\frac{\omega_0 L}{R}
 ````
 
-Środowisko `equation`, bez dodatkowych dolarów:
+The `equation` environment, with no surrounding dollars:
 
 \begin{equation}
 \nabla\cdot\mathbf{D}=\rho
 \end{equation}
 
-Środowisko `align*`:
+The `align*` environment:
 
 \begin{align*}
 U_R &= RI \\
@@ -58,37 +58,37 @@ U_L &= j\omega LI \\
 U_C &= \frac{I}{j\omega C}
 \end{align*}
 
-Środowisko `gather`:
+The `gather` environment:
 
 \begin{gather}
 a^2+b^2=c^2 \\
 e^{j\pi}+1=0
 \end{gather}
 
-Środowisko `alignat`:
+The `alignat` environment:
 
 \begin{alignat}{2}
 10&x+&3&y=2\\
 3&x+&13&y=4
 \end{alignat}
 
-## 2. Ułamki, indeksy i symbole
+## 2. Fractions, subscripts and symbols
 
-Indeksy: $x_i^2+x_{i+1}^2$, pierwiastki: $\sqrt{x}+\sqrt[3]{y}$.
+Subscripts: $x_i^2+x_{i+1}^2$, roots: $\sqrt{x}+\sqrt[3]{y}$.
 
 $$
 \frac{1}{1+\frac{1}{sRC}}=\frac{sRC}{1+sRC}
 $$
 
-Litery greckie i operatory: $\alpha+\beta=\gamma$, $\Omega\neq\omega$, $a\leq b$, $x\in\mathbb{R}$.
+Greek letters and operators: $\alpha+\beta=\gamma$, $\Omega\neq\omega$, $a\leq b$, $x\in\mathbb{R}$.
 
 $$
 \left|\frac{U_{out}}{U_{in}}\right|=\frac{1}{\sqrt{1+(\omega RC)^2}}
 $$
 
-Akcenty i wektory: $\vec{E}$, $\hat{x}$, $\overline{z}$, $\dot{x}$, $\ddot{x}$.
+Accents and vectors: $\vec{E}$, $\hat{x}$, $\overline{z}$, $\dot{x}$, $\ddot{x}$.
 
-## 3. Całki, sumy, granice i pochodne
+## 3. Integrals, sums, limits and derivatives
 
 $$
 \int_0^{\infty}e^{-at}\,dt=\frac{1}{a},\qquad a>0
@@ -106,7 +106,7 @@ $$
 \frac{\partial^2 u}{\partial t^2}=c^2\nabla^2u
 $$
 
-## 4. Macierze i układy
+## 4. Matrices and systems
 
 $$
 \mathbf{A}=\begin{bmatrix}R_1+R_2&-R_2\\-R_2&R_2+R_3\end{bmatrix}
@@ -131,10 +131,10 @@ $$
 \end{aligned}
 $$
 
-## 5. Opisy, kolor i numer wzoru
+## 5. Labels, colour and equation numbers
 
 $$
-\underbrace{RI}_{\text{rezystor}}+\underbrace{L\frac{dI}{dt}}_{\text{cewka}}=U(t)\tag{1}
+\underbrace{RI}_{\text{resistor}}+\underbrace{L\frac{dI}{dt}}_{\text{inductor}}=U(t)\tag{1}
 $$
 
 $$
@@ -145,51 +145,51 @@ $$
 \boxed{H(s)=\frac{1}{1+sRC}}
 $$
 
-Makra są lokalne dla jednego wzoru:
+Macros are local to a single formula:
 
 $$
 \def\vect#1{\mathbf{#1}}\vect{E}\cdot\vect{D}
 $$
 
-## 6. Wzory w elementach dokumentu
+## 6. Formulas inside document elements
 
-- Rezystor: $Z_R=R$.
-- Cewka: $Z_L=j\omega L$.
-- Kondensator: $Z_C=\frac{1}{j\omega C}$.
+- Resistor: $Z_R=R$.
+- Inductor: $Z_L=j\omega L$.
+- Capacitor: $Z_C=\frac{1}{j\omega C}$.
 
-> Prawo Ohma: $U=RI$.
+> Ohm's law: $U=RI$.
 
-| Wielkość | Wzór |
+| Quantity | Formula |
 | --- | --- |
-| Moc czynna | $P=UI\cos\varphi$ |
-| Moc bierna | $Q=UI\sin\varphi$ |
-| Moc pozorna | $S=UI$ |
+| Real power | $P=UI\cos\varphi$ |
+| Reactive power | $Q=UI\sin\varphi$ |
+| Apparent power | $S=UI$ |
 
-## 7. Przykłady, które pozostają tekstem
+## 7. Examples that stay as text
 
-Ceny $5 i $10 nie są wzorami. Escapowane dolary: \$x\$.
+Prices like $5 and $10 are not formulas. Escaped dollars: \$x\$.
 
-Kod inline: `$x^2$` oraz `\(x\)`.
+Inline code: `$x^2$` and `\(x\)`.
 
 ```javascript
 const literal = "$x^2$";
-// $$ to również zwykły kod
+// $$ is also just code
 ```
 
 ~~~text
-\[To jest przykład kodu, nie wzór\]
+\[This is a code sample, not a formula\]
 ~~~
 
-    $to_jest_kod$
+    $this_is_code$
 
-## 8. Zakres i ograniczenia
+## 8. Scope and limitations
 
-Renderowanie obejmuje polecenia wspierane przez KaTeX, m.in. środowiska matrix, pmatrix, bmatrix, Bmatrix, vmatrix, Vmatrix, cases, aligned, gathered i array wewnątrz wzorów. Środowiska equation, align, alignat, gather (także wersje z gwiazdką) oraz CD mogą występować bez dolarów. Renderer numeruje środowiska bez gwiazdki. Dla stałych numerów pomiędzy widokami użyj `\tag{...}`; odwołania `\label`/`\ref` nie są obsługiwane. Nie jest to kompilator pełnych dokumentów LaTeX ani TikZ.
+Rendering covers the commands KaTeX supports, including the matrix, pmatrix, bmatrix, Bmatrix, vmatrix, Vmatrix, cases, aligned, gathered and array environments inside formulas. The equation, align, alignat and gather environments (starred versions too) may appear without dollars. The renderer numbers the unstarred environments. For numbers that stay fixed across views use `\tag{...}`; `\label` and `\ref` references are not supported. This is not a compiler for full LaTeX documents, nor for TikZ.
 
-Błędne wyrażenie jest wyświetlane jako bezpieczny tekst źródłowy i pozostaje edytowalne. Polecenia ładujące zewnętrzne zasoby są zablokowane. Fonty PDF są dołączone lokalnie. DOCX zachowuje źródło LaTeX jako tekst; nie tworzy natywnych równań Worda.
+An invalid expression is shown as safe source text and stays editable. Commands that load external resources are blocked. PDF fonts are bundled locally. DOCX keeps the LaTeX source as text; it does not create native Word equations.
 
-W slajdach Marp alternatywne delimitery są normalizowane do zapisu dolarowego i renderowane przez silnik matematyczny Marp. Dokument Markdown zachowuje oryginalne delimitery i treść wzoru.
+In Marp slides the alternative delimiters are normalised to dollar notation and rendered by Marp's math engine. The Markdown document keeps the original delimiters and formula text.
 
-## Pochodzenie
+## Provenance
 
-Węzły edytora zaadaptowano z chinghssu/MerMarkEditorQ, commit b165dcf4fa5efbe04ac8d03adf0fc3d1f3f54393, licencja MIT. Parser, zachowanie źródła, integracja z Marp i fonty wydruku zostały dostosowane do bieżącego MerMark Editor.
+The editor nodes were adapted from chinghssu/MerMarkEditorQ, commit b165dcf4fa5efbe04ac8d03adf0fc3d1f3f54393, MIT licence. The parser, source-preserving behaviour, Marp integration and print fonts were adapted for the current MerMark Editor.

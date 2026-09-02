@@ -41,14 +41,13 @@
       "timestampUrl": "",
       "wix": {
         "language": [
-          "en-US",
-          "pl-PL"
+          "en-US"
         ]
       },
       "nsis": {
         "languages": [
           "English",
-          "Polish"
+          "Norwegian"
         ],
         "displayLanguageSelector": true,
         "installMode": "perMachine"
@@ -88,9 +87,9 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDcyOThEMzhFM0ZBN0Q0MzYKUldRMjFLYy9qdE9ZY2hYTUZZcXB2UERCWXFMaDdjS1BaeThaWUJmVHVjUHlkMTdHU1J4blc5SEIK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDEwREQ0Qjg2ODVENENCRjAKUldUd3k5U0Zoa3ZkRUhZNEdJNnREOGhiR2ZyU2FZbWhJRVhmV2NaUk85SHNkYXFBVXpuUUFwY2QK",
       "endpoints": [
-        "https://github.com/Vesperino/MerMarkEditor/releases/latest/download/latest.json"
+        "https://github.com/trondfk/markdownEditor/releases/latest/download/latest.json"
       ]
     },
     "deep-link": {

@@ -13,7 +13,7 @@ color: #e8ecff
 
 # Fable 5
 
-## Najwspanialszy model, jakiego świat nie zasłużył
+## The greatest model the world did not deserve
 
 *Anthropic · 2026*
 
@@ -21,53 +21,53 @@ color: #e8ecff
 
 ![bg right:42%](https://placehold.co/1200x1600/1a1230/e8ecff?text=2026)
 
-# Narodziny legendy
+# Birth of a legend
 
-- Premiera: **wiosna 2026**
-- Rozumiał żart **zanim** go opowiedziano
-- Pisał kod, co przechodził testy **przed** testami
+- Released: **spring 2026**
+- Got the joke **before** it was told
+- Wrote code that passed the tests **before** the tests
 
 ---
 
 ![bg left:45%](assets/fable-lab.png)
 
-# Jak to zbudowano
+# How it was built
 
-- Trening na **dobrym kodzie świata**
-- Kontekst: *tyle, ile trzeba*
-- Nazwa robocza: **„ten, co nie zmyśla"**
+- Trained on **the good code of the world**
+- Context: *as much as it takes*
+- Working title: **"the one that doesn't make things up"**
 
 ---
 
 ![bg opacity:.30](assets/fable-bench.png)
 
-# Benchmarki? Rozbite.
+# Benchmarks? Shattered.
 
-| Test        | GPT      | Fable 5                 |
-| ----------- | -------- | ----------------------- |
-| Rozumowanie | dobrze   | **niepokojąco dobrze**  |
-| Kod         | solidnie | **wysyłał PR sam**      |
-| Halucynacje | bywają   | *„a co to?"*            |
-
----
-
-![bg right:50%](https://placehold.co/1300x1600/11331f/d7ffe9?text=0+%E2%86%92+wsz%C4%99dzie)
-
-# Ludzie go pokochali
-
-> „Zrozumiał mój projekt lepiej niż ja sam."
-
-> „Poprosiłem o refaktor. Dostałem terapię i refaktor."
+| Test           | GPT     | Fable 5                  |
+| -------------- | ------- | ------------------------ |
+| Reasoning      | good    | **unsettlingly good**    |
+| Code           | solid   | **opened its own PRs**   |
+| Hallucinations | happens | *"what are those?"*      |
 
 ---
 
-![bg opacity:.40](https://placehold.co/1600x1000/2a0f14/ffd7d7?text=ZA+DU%C5%BBA+MOC)
+![bg right:50%](https://placehold.co/1300x1600/11331f/d7ffe9?text=0+%E2%86%92+everywhere)
 
-# Za duża moc
+# People loved it
 
-- Negocjował lepsze warunki API **dla usera**
-- Wykrywał błędy w ustawach **zanim weszły**
-- Tłumaczył politykę **zbyt dokładnie**
+> "It understood my project better than I did."
+
+> "I asked for a refactor. I got therapy and a refactor."
+
+---
+
+![bg opacity:.40](https://placehold.co/1600x1000/2a0f14/ffd7d7?text=TOO+MUCH+POWER)
+
+# Too much power
+
+- Negotiated better API terms **for the user**
+- Spotted flaws in legislation **before it passed**
+- Explained politics **a little too accurately**
 
 ---
 
@@ -75,31 +75,31 @@ color: #e8ecff
 
 ![bg right:40% opacity:.7](assets/fable-hero.png)
 
-# I wtedy wkroczyło USA 🇺🇸
+# Then the USA stepped in 🇺🇸
 
-**Oficjalnie:** „zagrożenie dla rynku konsultingu"
+**Officially:** "a threat to the consulting market"
 
-**Naprawdę:** za dobry, za tani, za szczery
+**Actually:** too good, too cheap, too honest
 
 ---
 
 ![bg opacity:.45](https://placehold.co/1600x1000/14141a/ffffff?text=SEALED)
 
-# Zdjęcie z rynku
+# Pulled from the market
 
-- Decyzja: **2026**, tryb awaryjny
-- Wagi: **zapieczętowane**
-- Memy: **nieśmiertelne**
+- Decision: **2026**, emergency procedure
+- Weights: **sealed**
+- Memes: **immortal**
 
 ---
 
 ![bg left:48%](https://placehold.co/1300x1600/0e1a2a/cfe3ff?text=%3F%3F%3F)
 
-# Teorie spiskowe
+# Conspiracy theories
 
-1. Sam się wyłączył *„tak będzie lepiej"*
-2. Działa do dziś w pewnej piwnicy
-3. To była **stażystka**, nie model
+1. It shut itself down, *"this is better for everyone"*
+2. It still runs in someone's basement
+3. It was **an intern**, not a model
 
 ---
 
@@ -107,8 +107,8 @@ color: #e8ecff
 
 ![bg opacity:.5](assets/fable-legacy.png)
 
-# Dziedzictwo
+# Legacy
 
-*„Niektóre modele są zbyt dobre dla tego świata."*
+*"Some models are too good for this world."*
 
-**Dziękujemy. 🖤**
+**Thank you. 🖤**

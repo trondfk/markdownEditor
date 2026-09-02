@@ -54,12 +54,15 @@ fn build_chat_body(req: &AiSendRequest) -> serde_json::Value {
 /// turns (user/assistant alternating), then the fresh document attachment (when
 /// sent), then the live user message (per-turn context joined with the prompt).
 /// The tool loop accumulates intra-turn messages on top of this seed.
+///
+/// OpenAI-compatible servers do not report their window on the chat path, so
+/// the history falls back to the flat budget rather than a derived one.
 fn initial_messages(req: &AiSendRequest) -> Vec<serde_json::Value> {
     let mut messages = Vec::new();
     if !req.preamble.is_empty() {
         messages.push(serde_json::json!({ "role": "system", "content": req.preamble }));
     }
-    for turn in file_tools::trim_history(&req.history) {
+    for turn in file_tools::trim_history(&req.history, file_tools::history_char_budget(None)) {
         messages.push(serde_json::json!({ "role": turn.role, "content": turn.content }));
     }
     if let Some(doc) = crate::ai::process::doc_attachment_message(req) {

@@ -3,7 +3,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { exit } from '@tauri-apps/plugin-process';
 import { save } from '@tauri-apps/plugin-dialog';
 import { writeTextFile } from '@tauri-apps/plugin-fs';
-import { htmlToMarkdown } from '../utils/markdown-converter';
+import { wouldTruncateDocument } from '../utils/save-guard';
 import type { Tab } from './useTabs';
 
 export interface TabToSave {
@@ -13,10 +13,16 @@ export interface TabToSave {
 
 export interface UseCloseConfirmationOptions {
   tabs: Ref<Tab[]>;
-  activeTabId: Ref<string>;
-  getEditorHtml: () => string;
+  /**
+   * Serializes a tab to markdown, or returns null when no mounted editor can
+   * supply its text. Never falls back to a placeholder: a null here means the
+   * save must be skipped, not that the document is empty.
+   */
+  getTabMarkdown: (tab: Tab) => string | null;
   switchToTab: (tabId: string, preserveHasChanges?: boolean) => Promise<void>;
   syncActiveTabContent?: () => void;
+  /** Surfaces a save that could not be performed, so the user isn't stuck. */
+  onSaveFailed?: (tab: Tab) => void;
 }
 
 export interface UseCloseConfirmationReturn {
@@ -31,7 +37,7 @@ export interface UseCloseConfirmationReturn {
 }
 
 export function useCloseConfirmation(options: UseCloseConfirmationOptions): UseCloseConfirmationReturn {
-  const { tabs, activeTabId, getEditorHtml, switchToTab, syncActiveTabContent } = options;
+  const { tabs, getTabMarkdown, switchToTab, syncActiveTabContent, onSaveFailed } = options;
 
   const showSaveConfirmDialog = ref(false);
   const currentTabToSave = ref<TabToSave | null>(null);
@@ -74,6 +80,22 @@ export function useCloseConfirmation(options: UseCloseConfirmationOptions): UseC
 
   const saveTabContent = async (tab: Tab): Promise<boolean> => {
     try {
+      // Resolve the text before prompting for a path, so a tab we cannot
+      // serialize never reaches writeTextFile.
+      const source = getTabMarkdown(tab);
+      if (source === null) {
+        console.error('[close] no editor could supply content for', tab.fileName);
+        onSaveFailed?.(tab);
+        return false;
+      }
+
+      const markdown = source.trimEnd();
+      if (wouldTruncateDocument(markdown, tab.originalMarkdown)) {
+        console.error('[close] refused to empty', tab.fileName);
+        onSaveFailed?.(tab);
+        return false;
+      }
+
       let filePath = tab.filePath;
 
       if (!filePath) {
@@ -84,15 +106,13 @@ export function useCloseConfirmation(options: UseCloseConfirmationOptions): UseC
       }
 
       if (filePath) {
-        // Get current content - if this is the active tab, get from editor
-        const html = tab.id === activeTabId.value ? getEditorHtml() : tab.content;
-        const markdown = htmlToMarkdown(html).trimEnd();
         await writeTextFile(filePath, markdown);
 
         // Update the tab
         tab.filePath = filePath;
         tab.fileName = filePath.split(/[/\\]/).pop() || 'Dokument';
         tab.hasChanges = false;
+        tab.originalMarkdown = markdown;
         return true;
       }
 

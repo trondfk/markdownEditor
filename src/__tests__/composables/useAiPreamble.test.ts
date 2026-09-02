@@ -216,13 +216,13 @@ describe('useAiPreamble.buildTurnContext', () => {
     expect(out).not.toContain('Pinned #1');
   });
 
-  it('uses Polish locale strings for pl', () => {
+  it('uses Norwegian locale strings for no', () => {
     const out = buildTurnContext({
       ...base(),
       pins: [{ id: '1', text: 'foo' }],
-      localeKey: 'pl',
+      localeKey: 'no',
     });
-    expect(out).toContain('Użytkownik załączył');
+    expect(out).toContain('Brukeren har lagt ved');
   });
 
   it('falls back to English for unknown locale', () => {
@@ -258,6 +258,28 @@ describe('useAiPreamble.buildTurnContext', () => {
     expect(out).toContain('MERMAID EDIT MODE');
     expect(out).toContain(':::mermaid');
     expect(out).toContain('":::"');
+  });
+
+  it('carries a compaction summary framed as settled history', () => {
+    const out = buildTurnContext({ ...base(), compactionSummary: 'We renamed the save guard.' });
+    expect(out).toContain('We renamed the save guard.');
+    expect(out).toContain('compacted');
+  });
+
+  it('leads with the compaction summary so later sections read in context', () => {
+    const out = buildTurnContext({
+      ...base(),
+      compactionSummary: 'Earlier work.',
+      pins: [{ id: '1', text: 'pinned-text' }],
+      docNeedsSave: true,
+    });
+    const order = [
+      out.indexOf('Earlier work.'),
+      out.indexOf('pinned-text'),
+      out.indexOf('IMPORTANT: The document is not saved yet'),
+    ];
+    expect(order.every(i => i >= 0)).toBe(true);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
   });
 
   it('keeps section order: pins, unsaved, large-doc, mermaid', () => {

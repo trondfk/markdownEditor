@@ -1,10 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import type { Translations } from '../../i18n/index';
+import { useI18n } from '../../i18n/index';
 import en from '../../i18n/locales/en';
-import pl from '../../i18n/locales/pl';
-import zhCN from '../../i18n/locales/zh-CN';
+import no from '../../i18n/locales/no';
 
-const locales: Record<string, Translations> = { en, pl, 'zh-CN': zhCN };
+const locales: Record<string, Translations> = { en, no };
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyRecord = Record<string, any>;
@@ -56,13 +56,28 @@ describe('i18n translations', () => {
     }
   });
 
-  it('zh-CN should have Chinese characters in most values', () => {
-    const chineseRegex = /[\u4e00-\u9fff]/;
-    const stringKeys = getStringKeys(zhCN);
-    const skipKeys = new Set(['appName', 'bold', 'italic', 'strikethrough', 'inlineCode', 'mermaid', 'exportPdf', 'printScale', 'diffView', 'mergeView']);
-    const keysToCheck = stringKeys.filter(k => !skipKeys.has(k));
-    const chineseCount = keysToCheck.filter(key => chineseRegex.test((zhCN as AnyRecord)[key] as string)).length;
-    const ratio = chineseCount / keysToCheck.length;
-    expect(ratio, `Only ${(ratio * 100).toFixed(0)}% of zh-CN keys contain Chinese characters`).toBeGreaterThan(0.8);
+  it('no should be translated rather than copied from English', () => {
+    // Brand names, format samples and single-letter format buttons are identical by design.
+    const skipKeys = new Set([
+      'appName', 'exportPdf', 'exportDocx', 'bold', 'italic', 'strikethrough', 'mermaid',
+      'printScale', 'zoom', 'diffView', 'tokens', 'aiTabLabel', 'aiCliStatusClaude',
+      'aiCliStatusCodex', 'aiOllamaBaseUrlPlaceholder', 'aiOpenaiBaseUrlPlaceholder',
+      'aiFirstRunOk', 'aiSendButton', 'aiPinSendLabel', 'aiSettingsCliHeading',
+      'themeVariantMinimal', 'aiAssistMermaidButton', 'pdfPageNumberFormatN',
+      'pdfPageNumberFormatNOfTotal', 'marpPause', 'editor',
+    ]);
+    const keysToCheck = getStringKeys(en).filter(k => !skipKeys.has(k));
+    const untranslated = keysToCheck.filter(
+      key => (no as AnyRecord)[key] === (en as AnyRecord)[key],
+    );
+    expect(untranslated, 'no keys still hold the English string').toEqual([]);
+  });
+
+  it('every locale with translations is selectable and labelled', () => {
+    const { availableLocales, localeLabels } = useI18n();
+    expect([...availableLocales].sort()).toEqual(Object.keys(locales).sort());
+    for (const loc of availableLocales) {
+      expect(localeLabels[loc], `${loc} has no display label`).toBeTruthy();
+    }
   });
 });

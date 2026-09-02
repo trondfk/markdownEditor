@@ -63,6 +63,7 @@ const IndentAwareCodeBlock = CodeBlockLowlight.extend({
     };
   },
 });
+import { HighlightExtension } from "../extensions/HighlightExtension";
 import { Placeholder } from "@tiptap/extension-placeholder";
 import { CharacterCount } from "@tiptap/extension-character-count";
 import { common, createLowlight } from "lowlight";
@@ -507,6 +508,10 @@ const editor = useEditor({
     TaskItem.configure({
       nested: true,
     }),
+    // Markdown has no highlight syntax, so a highlight persists as inline
+    // <mark> HTML. The converter rewrites the colour from a validated hex on
+    // the way out; see utils/highlight-colors.
+    HighlightExtension,
     IndentAwareCodeBlock.configure({
       lowlight,
     }),
@@ -1208,6 +1213,25 @@ defineExpose({
   border: none;
   border-top: 2px solid var(--hr-color);
   margin: 2em 0;
+}
+
+/* Every highlight colour is pale, so the text on top has to be dark in all
+   themes. The theme's own colour is near-white in dark mode and would vanish.
+   Descendants are included because nested spans (a link, inline code) carry
+   their own theme colour and would otherwise stay unreadable.
+   The background here only covers a bare <mark> written by hand; a highlight
+   made in the app carries its colour inline. */
+.editor-content .tiptap mark,
+.editor-content .tiptap mark * {
+  color: #1a1a1a;
+}
+
+.editor-content .tiptap mark {
+  background-color: #fff3a3;
+  padding: 0 0.15em;
+  border-radius: 2px;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
 }
 
 .editor-content .tiptap a.editor-link {

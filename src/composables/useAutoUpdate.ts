@@ -1,4 +1,5 @@
 import { ref } from 'vue';
+import { t } from '../i18n';
 
 export interface UpdateInfo {
   version: string;
@@ -20,7 +21,7 @@ export interface UseAutoUpdateReturn {
 }
 
 const DISMISSED_KEY = 'mermark-dismissed-update-version';
-const GITHUB_REPO = 'Vesperino/MerMarkEditor';
+const GITHUB_REPO = 'trondfk/markdownEditor';
 
 // Module-level singletons so App.vue and SettingsModal share the same state.
 const showUpdateDialog = ref(false);
@@ -112,7 +113,7 @@ export function useAutoUpdate(): UseAutoUpdateReturn {
         await relaunch();
       }
     } catch (error) {
-      updateError.value = error instanceof Error ? error.message : 'Błąd podczas aktualizacji';
+      updateError.value = error instanceof Error ? error.message : t.value.updateFailed;
       isUpdating.value = false;
     }
   };

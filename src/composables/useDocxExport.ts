@@ -16,6 +16,7 @@ import { writeFile } from '@tauri-apps/plugin-fs';
 import { serializeEditorContent } from '../utils/documentSerializer';
 import { DOM_SELECTORS } from '../constants';
 import { decodeMath, mathMarkdown } from '../utils/math';
+import { t } from '../i18n';
 
 type DocxItem = Paragraph | Table;
 
@@ -207,7 +208,7 @@ export function convertElementToDocxItems(el: Element): DocxItem[] {
 
   if (tag === 'figure' && el.classList.contains('mermaid-print-figure')) {
     return [new Paragraph({
-      children: [new TextRun({ text: '[Diagram Mermaid — wizualizacja dostępna w MerMark Editor]', italics: true, color: '666666' })],
+      children: [new TextRun({ text: t.value.docxMermaidPlaceholder, italics: true, color: '666666' })],
     })];
   }
 

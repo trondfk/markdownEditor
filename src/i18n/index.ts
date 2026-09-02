@@ -1,9 +1,8 @@
 import { ref, computed } from 'vue';
 import en from './locales/en';
-import pl from './locales/pl';
-import zhCN from './locales/zh-CN';
+import no from './locales/no';
 
-export type Locale = 'en' | 'pl' | 'zh-CN';
+export type Locale = 'en' | 'no';
 
 export interface Translations {
   // App
@@ -22,6 +21,8 @@ export interface Translations {
   saveAs: string;
   exportPdf: string;
   exportDocx: string;
+  docxMermaidPlaceholder: string;
+  openingFile: string;
   presentMarp: string;
 
   // Toolbar - Edit operations
@@ -44,6 +45,10 @@ export interface Translations {
   strikethroughTooltip: string;
   inlineCode: string;
   inlineCodeTooltip: string;
+  highlight: string;
+  highlightTooltip: string;
+  highlightRemove: string;
+  highlightColorLabel: (id: string) => string;
 
   // Toolbar - Lists
   bulletList: string;
@@ -235,6 +240,7 @@ export interface Translations {
   supportDev: string;
   supportDevTooltip: string;
   buyMeACoffee: string;
+  updateFailed: string;
   updatesTab: string;
   checkForUpdates: string;
   checkingForUpdates: string;
@@ -265,6 +271,7 @@ export interface Translations {
 
   // File watching & conflict
   fileReloadedExternally: (fileName: string) => string;
+  saveFailed: (fileName: string) => string;
   fileReloaded: string;
   fileReloadError: string;
   fileChangedExternally: string;
@@ -457,6 +464,10 @@ export interface Translations {
   aiAccessReadableFiles: string;
   aiAccessWritableFiles: string;
   aiToolFullArgs: string;
+  aiCompactionMarker: (n: number) => string;
+  aiCompactionSummaryLabel: string;
+  aiCompactionTooltip: string;
+  aiCompacting: string;
   aiSettingsCliHeading: string;
   aiSettingsEffortHeading: string;
   aiSettingsCopyAudit: string;
@@ -631,6 +642,7 @@ export interface Translations {
   pdfTocPageBreak: string;
 
   // Marp presentation
+  marpRenderFailed: string;
   marpPreviewTitle: string;
   marpExportHtml: string;
   marpPrevSlide: string;
@@ -680,14 +692,12 @@ export interface Translations {
 
 const translations: Record<Locale, Translations> = {
   en,
-  pl,
-  'zh-CN': zhCN,
+  no,
 };
 
 const localeLabels: Record<Locale, string> = {
   en: 'English',
-  pl: 'Polski',
-  'zh-CN': '简体中文',
+  no: 'Norsk',
 };
 
 function getInitialLocale(): Locale {
@@ -719,7 +729,7 @@ export function useI18n() {
     locale.value = locales[(idx + 1) % locales.length];
   };
 
-  const availableLocales: Locale[] = ['en', 'pl', 'zh-CN'];
+  const availableLocales: Locale[] = ['en', 'no'];
 
   return {
     locale,

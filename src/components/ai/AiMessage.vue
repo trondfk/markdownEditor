@@ -17,6 +17,7 @@ const emit = defineEmits<{
 
 const isTool = computed(() => props.message.role === 'tool');
 const isAttachment = computed(() => props.message.role === 'attachment');
+const isCompaction = computed(() => props.message.role === 'compaction');
 const isAssistant = computed(() => props.message.role === 'assistant');
 
 // Tool args arrive as a JSON string (see useAi.ts pushMessage for
@@ -195,6 +196,23 @@ function formatToolPreviewValue(value: unknown): string {
     <div class="ai-msg__tool-details">
       <span class="ai-msg__tool-details-label">{{ t.aiToolFullArgs }}</span>
       <pre class="ai-msg__tool-args-full">{{ prettyToolArgs }}</pre>
+    </div>
+  </details>
+  <details
+    v-else-if="isCompaction"
+    class="ai-msg ai-msg--compaction"
+  >
+    <summary class="ai-msg__compaction-row" :title="t.aiCompactionTooltip">
+      <span class="ai-msg__compaction-rule" aria-hidden="true"></span>
+      <svg class="ai-msg__compaction-chevron" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+      <span class="ai-msg__compaction-label">
+        {{ t.aiCompactionMarker(message.compactedCount ?? 0) }}
+      </span>
+      <span class="ai-msg__compaction-rule" aria-hidden="true"></span>
+    </summary>
+    <div class="ai-msg__compaction-details">
+      <span class="ai-msg__compaction-details-label">{{ t.aiCompactionSummaryLabel }}</span>
+      <pre class="ai-msg__compaction-summary">{{ message.text }}</pre>
     </div>
   </details>
   <div
@@ -516,6 +534,82 @@ function formatToolPreviewValue(value: unknown): string {
   overflow-y: auto;
   overflow-x: hidden;
   min-height: 32px;
+}
+
+/* Compaction marker — a quiet rule across the thread where earlier turns were
+   folded into a summary, expandable to read what was kept. Same <details>
+   constraints as the tool chip: display block, no overflow clipping. */
+.ai-msg--compaction {
+  padding: 0;
+  align-self: stretch;
+  width: 100%;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-size: 11px;
+  display: block;
+  box-sizing: border-box;
+  margin: 2px 0;
+}
+.ai-msg__compaction-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0;
+  cursor: pointer;
+  list-style: none;
+  color: inherit;
+}
+.ai-msg__compaction-row::-webkit-details-marker { display: none; }
+.ai-msg__compaction-row:hover { color: var(--text-secondary); }
+.ai-msg__compaction-rule {
+  flex: 1;
+  height: 1px;
+  min-width: 8px;
+  background: var(--border-primary);
+}
+.ai-msg__compaction-chevron {
+  flex-shrink: 0;
+  transition: transform 120ms ease;
+  opacity: 0.6;
+}
+.ai-msg--compaction[open] .ai-msg__compaction-chevron { transform: rotate(90deg); }
+.ai-msg__compaction-label {
+  flex-shrink: 0;
+  font-style: italic;
+  white-space: nowrap;
+}
+.ai-msg__compaction-details {
+  margin-top: 6px;
+  padding: 8px 10px;
+  border: 1px dashed var(--border-primary);
+  border-radius: 6px;
+  background: var(--bg-secondary, var(--bg-tertiary));
+  box-sizing: border-box;
+  display: block;
+}
+.ai-msg__compaction-details-label {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 600;
+}
+.ai-msg__compaction-summary {
+  margin: 0;
+  padding: 8px;
+  border-radius: 4px;
+  background: var(--bg-primary, #fff);
+  border: 1px solid var(--border-primary);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  box-sizing: border-box;
+  max-height: min(360px, 45vh);
+  overflow-y: auto;
 }
 
 /* Attachment marker — click to inspect what was sent */

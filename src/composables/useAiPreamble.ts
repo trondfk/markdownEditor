@@ -1,5 +1,6 @@
 import type { AccessMap, CliKind } from '../services/aiCommands';
 import type { MermaidFormat } from '../utils/mermaid-formats';
+import { compactionTurnText } from '../utils/ai-compaction';
 import { OLLAMA_DEFAULT_NUM_CTX, OLLAMA_MIN_NUM_CTX } from './useSettings';
 
 export interface PinnedRef {
@@ -34,6 +35,11 @@ export interface PreambleOptions {
    *  than the claude/codex CLI Edit/Write tools. Switches the edit
    *  instruction wording accordingly. */
   localTools?: boolean;
+  /** Summary standing in for compacted turns, on the first turn of the session
+   *  that replaced them. Only for claude/codex: the local providers carry the
+   *  same summary in their replayed history, and sending it twice would both
+   *  waste the context compaction just freed and read as a repeated turn. */
+  compactionSummary?: string;
 }
 
 interface PinScopeStrings {
@@ -50,17 +56,11 @@ export const PIN_SCOPE_INSTRUCTIONS: Record<string, PinScopeStrings> = {
     reply: 'Reply in the same language as the user\'s most recent message.',
     markers: 'Each fragment below is wrapped in <<< and >>> marker lines. The markers are NOT part of the document — never include them in edits or quotes.',
   },
-  pl: {
-    header: (n) => `Użytkownik załączył poniżej ${n} fragment(ów).`,
-    rule: 'Jeśli użytkownik wyraźnie nie zaznaczy inaczej, traktuj jego polecenie jako odnoszące się DO TYCH fragmentów — nie do całego dokumentu. Zmiany wprowadzaj wyłącznie wtedy, gdy użytkownik wprost o nie prosi — i tylko w załączonych fragmentach; na pytania i prośby o opinię odpowiadaj w czacie, niczego nie edytując.',
-    reply: 'Odpowiadaj w tym samym języku co ostatnia wiadomość użytkownika.',
-    markers: 'Każdy fragment poniżej jest ujęty w linie-znaczniki <<< i >>>. Znaczniki NIE są częścią dokumentu — nigdy nie włączaj ich do edycji ani cytatów.',
-  },
-  'zh-CN': {
-    header: (n) => `用户在下方附加了 ${n} 个片段。`,
-    rule: '除非用户明确说明，否则将用户的请求视为仅针对这些片段，而不是整个文档。仅当用户明确要求修改时，才对附加片段进行更改；如果用户只是提问或讨论，请直接在对话中回答，不要编辑文件。',
-    reply: '请使用与用户最近一条消息相同的语言回复。',
-    markers: '以下每个片段都由 <<< 和 >>> 标记行包围。这些标记不是文档内容的一部分——切勿将其包含在编辑或引用中。',
+  no: {
+    header: (n) => `Brukeren har lagt ved ${n} utdrag nedenfor.`,
+    rule: 'Med mindre brukeren uttrykkelig sier noe annet, skal du behandle forespørselen som at den gjelder DISSE utdragene, ikke hele dokumentet. Gjør bare endringer når brukeren uttrykkelig ber om det, og da bare i de vedlagte utdragene; spørsmål, vurderinger og diskusjon svarer du på i chatten uten å redigere noe.',
+    reply: 'Svar på samme språk som den siste meldingen fra brukeren.',
+    markers: 'Hvert utdrag nedenfor er omsluttet av markørlinjene <<< og >>>. Markørene er IKKE en del av dokumentet — ta dem aldri med i endringer eller sitater.',
   },
 };
 
@@ -130,6 +130,11 @@ export function buildStaticPreamble(opts: PreambleOptions): string {
  */
 export function buildTurnContext(opts: PreambleOptions): string {
   const sections: string[] = [];
+  // Before anything else: the model is resuming a conversation it has no
+  // record of, and everything below reads differently without that.
+  if (opts.compactionSummary) {
+    sections.push(compactionTurnText(opts.compactionSummary));
+  }
   if (opts.pins.length > 0 && opts.includePins) {
     const blocks = opts.pins.map((p, i) => {
       const truncated = p.text.length > 4000 ? p.text.slice(0, 4000) + '…' : p.text;

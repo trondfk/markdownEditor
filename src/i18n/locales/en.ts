@@ -16,6 +16,8 @@ const en: Translations = {
   saveAs: 'Save As',
   exportPdf: 'PDF',
   exportDocx: 'DOCX',
+  docxMermaidPlaceholder: '[Mermaid diagram, viewable in MerMark Editor]',
+  openingFile: 'Opening file...',
   presentMarp: 'Present as Marp',
 
   // Toolbar - Edit operations
@@ -38,6 +40,17 @@ const en: Translations = {
   strikethroughTooltip: 'Strikethrough ~~text~~',
   inlineCode: 'Code',
   inlineCodeTooltip: 'Inline code `code`',
+  highlight: 'Highlight',
+  highlightTooltip: 'Highlight text in colour',
+  highlightRemove: 'Remove highlight',
+  highlightColorLabel: (id) => ({
+    yellow: 'Yellow',
+    green: 'Green',
+    blue: 'Blue',
+    pink: 'Pink',
+    orange: 'Orange',
+    purple: 'Purple',
+  } as Record<string, string>)[id] ?? id,
 
   // Toolbar - Lists
   bulletList: 'Bullet list - item',
@@ -229,6 +242,7 @@ const en: Translations = {
   supportDev: 'Support development',
   supportDevTooltip: 'MerMark is free and open source. If it helps you, you can buy me a coffee — totally optional.',
   buyMeACoffee: 'Buy me a coffee',
+  updateFailed: 'The update could not be completed.',
   updatesTab: 'Updates',
   checkForUpdates: 'Check for updates',
   checkingForUpdates: 'Checking...',
@@ -259,6 +273,7 @@ const en: Translations = {
 
   // File watching & conflict
   fileReloadedExternally: (fileName: string) => `"${fileName}" was updated externally and reloaded.`,
+  saveFailed: (fileName: string) => `Could not save "${fileName}" — its content was unavailable, so the file was left untouched.`,
   fileReloaded: 'File reloaded from disk.',
   fileReloadError: 'Could not reload file from disk.',
   fileChangedExternally: 'File Changed Externally',
@@ -391,7 +406,7 @@ const en: Translations = {
   aiModel: 'Model',
   aiEmptyHint: 'Ask me anything about this document.',
   aiEmptyKeyHint: 'Ctrl+Enter to send.',
-  aiContextNearlyFull: 'Context nearly full — start a new chat or trim pinned fragments.',
+  aiContextNearlyFull: 'Context nearly full: earlier turns will be summarised automatically to make room.',
   aiModelMissing: 'Select a model first (model picker above or Settings → AI).',
   aiEffort: 'Effort',
   aiRevertSnapshot: 'Revert to last snapshot before AI edit',
@@ -451,6 +466,10 @@ const en: Translations = {
   aiAccessReadableFiles: 'Readable files',
   aiAccessWritableFiles: 'Writable files',
   aiToolFullArgs: 'Full arguments',
+  aiCompactionMarker: (n) => `Summarised ${n} earlier message${n === 1 ? '' : 's'}`,
+  aiCompactionSummaryLabel: 'Summary kept in context',
+  aiCompactionTooltip: 'Click to read the summary that replaced these turns',
+  aiCompacting: 'Summarising the conversation…',
   aiSettingsCliHeading: 'CLI',
   aiSettingsEffortHeading: 'Effort',
   aiSettingsCopyAudit: 'Copy',
@@ -621,6 +640,7 @@ const en: Translations = {
   pdfTocPageBreak: 'TOC on its own page',
 
   // Marp presentation
+  marpRenderFailed: 'The slides could not be rendered.',
   marpPreviewTitle: 'Marp Presentation Preview',
   marpExportHtml: 'Export .html',
   marpPrevSlide: 'Previous slide',
