@@ -87,7 +87,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDEwREQ0Qjg2ODVENENCRjAKUldUd3k5U0Zoa3ZkRUhZNEdJNnREOGhiR2ZyU2FZbWhJRVhmV2NaUk85SHNkYXFBVXpuUUFwY2QK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDc5MzYyNjA0NTY5QzI1RjQKUldUMEpaeFdCQ1kyZWZQZitOLzBjQ1owNFd6MTNkcUxoVi8yK1FNWDJYQzl1OFRTUDdkZEIzWGwK",
       "endpoints": [
         "https://github.com/trondfk/markdownEditor/releases/latest/download/latest.json"
       ]

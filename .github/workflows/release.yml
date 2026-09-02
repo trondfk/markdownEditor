@@ -197,9 +197,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          # The signing key has no password. GitHub rejects empty secret values, so
-          # TAURI_SIGNING_PRIVATE_KEY_PASSWORD is intentionally left unset — an undefined
-          # secret resolves to "", which is what the signer expects for a passwordless key.
+          # The updater key is encrypted, so the password secret has to be set. An
+          # unset secret resolves to "", which the signer reports as a wrong password
+          # rather than as a missing one, and the build fails late during bundling.
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           releaseId: ${{ needs.create-release.outputs.release_id }}
