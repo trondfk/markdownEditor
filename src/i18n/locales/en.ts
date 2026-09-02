@@ -392,6 +392,7 @@ const en: Translations = {
   aiTmpRecoveryDiscard: 'Discard',
   aiTmpRecoveryShowDiff: 'Show diff',
   aiToggleTooltip: 'Toggle AI assistant',
+  dedication: 'Andrea',
   aiStatusLoading: 'Checking…',
   aiStatusUnknown: 'Unknown — click Re-check',
   aiResetFirstRun: 'Show first-run tooltip again',

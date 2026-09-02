@@ -57,8 +57,10 @@ describe('i18n translations', () => {
   });
 
   it('no should be translated rather than copied from English', () => {
-    // Brand names, format samples and single-letter format buttons are identical by design.
+    // Brand names, proper nouns, format samples and single-letter format
+    // buttons are identical by design.
     const skipKeys = new Set([
+      'dedication',
       'appName', 'exportPdf', 'exportDocx', 'bold', 'italic', 'strikethrough', 'mermaid',
       'printScale', 'zoom', 'diffView', 'tokens', 'aiTabLabel', 'aiCliStatusClaude',
       'aiCliStatusCodex', 'aiOllamaBaseUrlPlaceholder', 'aiOpenaiBaseUrlPlaceholder',

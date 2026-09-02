@@ -4,6 +4,7 @@ import { useWorkspace } from '../composables/useWorkspace';
 import { ZOOM_MIN, ZOOM_MAX } from '../composables/useEditorZoom';
 import OpenSplitButton from './OpenSplitButton.vue';
 import AiToolbarButton from './ai/AiToolbarButton.vue';
+import { DEDICATION_MESSAGE, DEDICATION_NAME } from '../utils/dedication';
 
 const ws = useWorkspace();
 
@@ -83,6 +84,7 @@ const {
   currentHighlightColor,
   setHighlight,
   unsetHighlight,
+  showDedication,
   showTokenMenu,
   insertMermaid,
   insertFootnote,
@@ -636,6 +638,27 @@ const showLabel = (id: string) => {
       @toggle="emit('toggleAi')"
     />
   </template>
+
+  <div v-else-if="itemId === 'dedication'" class="toolbar-group dropdown-container">
+    <button
+      @click="showDedication = !showDedication"
+      :class="{ active: showDedication }"
+      class="toolbar-btn icon-only dedication-btn"
+      v-tooltip="DEDICATION_NAME"
+      :aria-label="DEDICATION_NAME"
+    >
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" stroke="none">
+        <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l8.84 8.84 8.84-8.84a5.5 5.5 0 0 0 0-7.78z"/>
+      </svg>
+    </button>
+    <div
+      v-if="showDedication"
+      class="dropdown-menu dedication-menu"
+      :class="{ 'dropdown-up': dropdownDirection === 'up', 'dropdown-right': dropdownDirection === 'right' }"
+    >
+      {{ DEDICATION_MESSAGE }}
+    </div>
+  </div>
 </template>
 
 <style scoped>
@@ -841,6 +864,48 @@ const showLabel = (id: string) => {
   height: 3px;
   border-radius: 2px;
   pointer-events: none;
+}
+
+/* The heart and its note keep their own colour in every theme rather than
+   following the toolbar's icon colour, so the heart reads as a heart and not
+   as another control. Both tones are picked for contrast against the theme's
+   own background, hence the dark-mode overrides below. */
+.dedication-btn {
+  color: #d1385f;
+}
+
+.dedication-btn:hover:not(:disabled),
+.dedication-btn.active {
+  color: #b02a4c;
+}
+
+.dedication-btn svg {
+  transition: transform 0.15s ease;
+}
+
+.dedication-btn:hover:not(:disabled) svg {
+  transform: scale(1.15);
+}
+
+.dedication-menu {
+  min-width: 0;
+  padding: 10px 14px;
+  white-space: nowrap;
+  font-size: 13px;
+  color: #c02c52;
+}
+
+html.dark .dedication-btn {
+  color: #e0507a;
+}
+
+html.dark .dedication-btn:hover:not(:disabled),
+html.dark .dedication-btn.active {
+  color: #ff7d9d;
+}
+
+html.dark .dedication-menu {
+  color: #ff7d9d;
 }
 .dropdown-item.danger:hover:not(:disabled) { background: var(--danger-text-bg); }
 

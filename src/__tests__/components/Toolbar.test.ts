@@ -3,6 +3,7 @@ import { mount } from '@vue/test-utils';
 import { ref } from 'vue';
 import Toolbar from '../../components/Toolbar.vue';
 import { HIGHLIGHT_COLORS } from '../../utils/highlight-colors';
+import { DEDICATION_MESSAGE } from '../../utils/dedication';
 
 // Mock markdown converter
 vi.mock('../../utils/markdown-converter', () => ({
@@ -650,6 +651,45 @@ describe('Toolbar Component', () => {
       expect(active).toHaveLength(1);
       expect(active[0].attributes('style')).toContain('185, 246, 202');
       await button.trigger('click');
+    });
+  });
+
+  describe('Dedication heart', () => {
+    // Same module-scoped singleton caveat as the highlight picker: every test
+    // that opens the note closes it again.
+    it('keeps the note hidden until the heart is clicked', async () => {
+      const wrapper = mount(Toolbar, {
+        global: { provide: { editor: createMockEditor() } },
+      });
+
+      expect(wrapper.find('.dedication-menu').exists()).toBe(false);
+
+      const heart = wrapper.find('.dedication-btn');
+      await heart.trigger('click');
+      expect(wrapper.find('.dedication-menu').text()).toBe(DEDICATION_MESSAGE);
+
+      await heart.trigger('click');
+      expect(wrapper.find('.dedication-menu').exists()).toBe(false);
+    });
+
+    it('renders the message as text so the "<3" survives intact', async () => {
+      const wrapper = mount(Toolbar, {
+        global: { provide: { editor: createMockEditor() } },
+      });
+
+      const heart = wrapper.find('.dedication-btn');
+      await heart.trigger('click');
+      expect(wrapper.find('.dedication-menu').html()).toContain('&lt;3');
+
+      await heart.trigger('click');
+    });
+
+    it('stays available without an editor, since it edits nothing', () => {
+      const wrapper = mount(Toolbar, {
+        global: { provide: { editor: ref(null) } },
+      });
+
+      expect(wrapper.find('.dedication-btn').attributes('disabled')).toBeUndefined();
     });
   });
 

@@ -11,6 +11,7 @@ const showTableMenu = ref(false);
 const showImageMenu = ref(false);
 const showTokenMenu = ref(false);
 const showHighlightMenu = ref(false);
+const showDedication = ref(false);
 const editorUpdateCounter = ref(0);
 
 // ===== Shared editor-update listener =====
@@ -239,6 +240,7 @@ export function useToolbarActions() {
     showImageMenu.value = false;
     showTokenMenu.value = false;
     showHighlightMenu.value = false;
+    showDedication.value = false;
   };
 
   return {
@@ -301,6 +303,9 @@ export function useToolbarActions() {
 
     // Footnote
     insertFootnote,
+
+    // Dedication
+    showDedication,
 
     // Dropdowns
     closeDropdowns,

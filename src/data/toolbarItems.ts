@@ -13,7 +13,8 @@ export type ToolbarItemCategory =
   | 'footnote'
   | 'stats'
   | 'zoom'
-  | 'view-toggles';
+  | 'view-toggles'
+  | 'dedication';
 
 export interface ToolbarItemDef {
   id: string;
@@ -104,6 +105,10 @@ export const TOOLBAR_ITEMS: ToolbarItemDef[] = [
 
   // AI toggle
   { id: 'ai-toggle', category: 'view-toggles', defaultZone: 'toolbar', defaultOrder: 1200, needsEditor: false, labelKey: 'aiToggleTooltip' },
+
+  // Its own category so the toolbar puts a separator in front of it and the
+  // heart sits on its own at the far end, clear of the editing controls.
+  { id: 'dedication', category: 'dedication', defaultZone: 'toolbar', defaultOrder: 1300, needsEditor: false, labelKey: 'dedication' },
 ];
 
 export function getItemDef(id: string): ToolbarItemDef | undefined {

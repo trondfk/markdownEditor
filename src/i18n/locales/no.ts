@@ -392,6 +392,7 @@ const no: Translations = {
   aiTmpRecoveryDiscard: 'Forkast',
   aiTmpRecoveryShowDiff: 'Vis diff',
   aiToggleTooltip: 'Vis eller skjul AI-assistenten',
+  dedication: 'Andrea',
   aiStatusLoading: 'Sjekker...',
   aiStatusUnknown: 'Ukjent — klikk Sjekk på nytt',
   aiResetFirstRun: 'Vis førstegangstipset igjen',

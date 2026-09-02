@@ -390,6 +390,8 @@ export interface Translations {
   aiTmpRecoveryDiscard: string;
   aiTmpRecoveryShowDiff: string;
   aiToggleTooltip: string;
+  /** Names the heart button in the toolbar layout list. See utils/dedication. */
+  dedication: string;
   aiStatusLoading: string;
   aiStatusUnknown: string;
   aiResetFirstRun: string;
