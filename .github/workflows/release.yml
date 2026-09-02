@@ -1,6 +1,10 @@
 name: Release
 
 on:
+  # A release normally follows a push to main, but the path filter below means a
+  # push can legitimately not qualify, and a rewritten history leaves nothing to
+  # diff against at all. Manual dispatch is the way to cut a release regardless.
+  workflow_dispatch:
   push:
     branches:
       - main
