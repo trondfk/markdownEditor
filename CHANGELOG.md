@@ -4,6 +4,14 @@
 
 ---
 
+# Release v1.0.1: A heart on the toolbar
+
+## Features
+
+- A small heart sits at the end of the toolbar. Click it to see what it says. It is meant for one particular person, it changes nothing in the document, and it can be moved or hidden from Settings like any other toolbar button
+
+---
+
 # Release v1.0.0: Text highlighting, Norwegian, and a fix for disappearing text
 
 This is the first release from the independent fork at `trondfk/markdownEditor`. Builds from here check this repository for updates and are signed with its own key. An installation from the upstream project keeps following upstream, so moving to this fork means installing it once by hand.
