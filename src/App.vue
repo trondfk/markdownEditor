@@ -1902,8 +1902,8 @@ const openFileWithCrossWindowDialog = async (): Promise<void> => {
     const selected = await open({
       multiple: false,
       filters: [
-        { name: 'Markdown', extensions: ['md', 'markdown'] },
-        { name: 'Wszystkie pliki', extensions: ['*'] },
+        { name: t.value.markdownFiles, extensions: ['md', 'markdown'] },
+        { name: t.value.allFiles, extensions: ['*'] },
       ],
     });
 

@@ -5,6 +5,7 @@ import { open as openExternal } from '@tauri-apps/plugin-shell';
 import { htmlToMarkdown, markdownToHtml, detectLineEnding, applyLineEnding, generateSlug } from '../utils/markdown-converter';
 import { atomicWriteTextFile } from '../utils/atomic-write';
 import { auditShrink } from '../utils/save-audit';
+import { t } from '../i18n';
 import { aiCommands } from '../services/aiCommands';
 import type { Tab } from './useTabs';
 import { EMPTY_TAB_CONTENT, DEFAULT_FILE_NAME, DOM_SELECTORS, LARGE_FILE_CHAR_THRESHOLD } from '../constants';
@@ -151,8 +152,8 @@ export function useFileOperations(options: UseFileOperationsOptions): UseFileOpe
       const selected = await open({
         multiple: false,
         filters: [
-          { name: 'Markdown', extensions: ['md', 'markdown'] },
-          { name: 'Wszystkie pliki', extensions: ['*'] },
+          { name: t.value.markdownFiles, extensions: ['md', 'markdown'] },
+          { name: t.value.allFiles, extensions: ['*'] },
         ],
       });
 
