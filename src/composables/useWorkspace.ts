@@ -13,6 +13,7 @@ import {
   resolveSortMode,
   type WorkspaceSortMode,
 } from '../utils/workspace-sort';
+import { sanitizeFolderColors } from '../utils/folder-colors';
 
 export type { WorkspaceNode } from '../services/workspaceFs';
 
@@ -73,6 +74,8 @@ export function useWorkspace() {
     setWorkspaceSortMode,
     setWorkspaceSortOverride,
     setFolderSortOverride,
+    setFolderColorOverride,
+    remapFolderColorKeys,
     toggleSidebarVisible,
   } = useSettings();
 
@@ -122,6 +125,20 @@ export function useWorkspace() {
   }
   function setFolderSort(folderPath: string, mode: WorkspaceSortMode | null) {
     setFolderSortOverride(folderPath, mode);
+  }
+
+  // ===== Folder colours =====
+  // Purely cosmetic and deliberately not inherited by subfolders: a colour set
+  // on one folder marking it out would lose that meaning if it spread downwards.
+  const folderColors = computed(() => sanitizeFolderColors(settings.value.workspace.folderColors));
+
+  /** The chosen colour for a folder, or null when it follows the theme. */
+  function folderColorFor(folderPath: string): string | null {
+    return folderColors.value[folderPath] ?? null;
+  }
+
+  function setFolderColor(folderPath: string, hex: string | null) {
+    setFolderColorOverride(folderPath, hex);
   }
 
   /** Replace the set of dirty (unsaved) file paths shown with a marker in the tree. */
@@ -332,6 +349,9 @@ export function useWorkspace() {
 
   async function renamePath(from: string, to: string): Promise<void> {
     await workspaceFs.rename(from, to);
+    // Colours are keyed by path, so they have to follow the folder and its
+    // coloured descendants. Only after the rename succeeded.
+    remapFolderColorKeys(from, to);
     await refreshAll();
   }
 
@@ -575,6 +595,9 @@ export function useWorkspace() {
     setGlobalSortMode,
     setWorkspaceSort,
     setFolderSort,
+    folderColors,
+    folderColorFor,
+    setFolderColor,
     tree,
     isLoading,
     error,

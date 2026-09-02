@@ -8,6 +8,7 @@ export type WorkspaceContextAction =
   | 'new-file-sibling'
   | 'new-folder-sibling'
   | 'sort-folder'
+  | 'folder-color'
   | 'rename'
   | 'delete'
   | 'reveal'
@@ -133,6 +134,13 @@ const handle = (action: WorkspaceContextAction) => {
         @click="handle('sort-folder')"
       >
         {{ t.workspaceSortFolder }}
+      </button>
+      <button
+        v-if="kind === 'folder'"
+        class="context-menu-item"
+        @click="handle('folder-color')"
+      >
+        {{ t.workspaceFolderColor }}
       </button>
       <div class="context-menu-divider"></div>
       <button v-if="!isRoot" class="context-menu-item" @click="handle('rename')">

@@ -3,6 +3,7 @@ import type { TokenModelId } from '../services/tokenCounter';
 import { TOKEN_MODELS } from '../services/tokenCounter';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { DEFAULT_SORT_MODE, migrateSortMode, type WorkspaceSortMode } from '../utils/workspace-sort';
+import { normalizeFolderColor, remapFolderColors } from '../utils/folder-colors';
 import { DEFAULT_MERMAID_DELIMITERS, setCurrentMermaidDelimiters } from '../utils/mermaid-delimiters';
 import {
   BUILTIN_MERMAID_FORMATS,
@@ -53,6 +54,8 @@ export interface WorkspaceSettings {
   sortByWorkspace: Record<string, WorkspaceSortMode>;
   /** Per-folder sort overrides, keyed by absolute folder path. */
   sortByFolder: Record<string, WorkspaceSortMode>;
+  /** Folder icon colours, keyed by absolute folder path. Unset means default. */
+  folderColors: Record<string, string>;
 }
 
 export type { WorkspaceSortMode } from '../utils/workspace-sort';
@@ -385,6 +388,7 @@ function getDefaultSettings(): AppSettings {
       sortMode: DEFAULT_SORT_MODE,
       sortByWorkspace: {},
       sortByFolder: {},
+      folderColors: {},
     },
     ai: {
       enabled: true,
@@ -528,6 +532,22 @@ export function useSettings() {
     if (mode === null) delete map[folderPath];
     else map[folderPath] = mode;
     settings.value.workspace.sortByFolder = map;
+  };
+
+  /** Passing null clears the colour and returns the folder to the theme default. */
+  const setFolderColorOverride = (folderPath: string, hex: string | null) => {
+    const color = hex === null ? null : normalizeFolderColor(hex);
+    const map = { ...(settings.value.workspace.folderColors ?? {}) };
+    if (color === null) delete map[folderPath];
+    else map[folderPath] = color;
+    settings.value.workspace.folderColors = map;
+  };
+
+  /** Keeps colours attached to their folders when a rename changes the paths. */
+  const remapFolderColorKeys = (from: string, to: string) => {
+    const current = settings.value.workspace.folderColors ?? {};
+    const next = remapFolderColors(current, from, to);
+    if (next !== current) settings.value.workspace.folderColors = next;
   };
 
   const toggleCodeWordWrap = () => {
@@ -717,6 +737,8 @@ export function useSettings() {
     setWorkspaceSortMode,
     setWorkspaceSortOverride,
     setFolderSortOverride,
+    setFolderColorOverride,
+    remapFolderColorKeys,
     setAiEnabled,
     setAiCheckCliHealthOnStartup,
     setAiDefaultCli,

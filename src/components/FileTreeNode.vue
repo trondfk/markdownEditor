@@ -55,6 +55,14 @@ const isHighlighted = computed(
 const isSelectedRow = computed(() => ws.isSelected(props.node.path));
 const isDirtyRow = computed(() => !isFolder.value && ws.isDirty(props.node.path));
 
+/**
+ * A user-chosen folder colour, or null to let the stylesheet decide. Bound as
+ * an inline style because the palette is data, not a fixed set of classes.
+ */
+const folderColor = computed(() =>
+  isFolder.value ? ws.folderColorFor(props.node.path) : null,
+);
+
 const rowEl = ref<HTMLDivElement | null>(null);
 
 function onViewChanges(e: MouseEvent) {
@@ -172,7 +180,7 @@ watch(
           <polyline points="9 18 15 12 9 6" />
         </svg>
       </span>
-      <span class="tree-icon">
+      <span class="tree-icon" :style="folderColor ? { color: folderColor } : undefined">
         <svg v-if="isFolder" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
         </svg>

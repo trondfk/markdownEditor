@@ -520,6 +520,11 @@ export interface Translations {
   workspaceSortByModified: string;
   workspaceSortMenu: string;
   workspaceSortFolder: string;
+  /** Opens the folder colour picker from the tree context menu. */
+  workspaceFolderColor: string;
+  /** Clears a folder's colour so its icon follows the theme again. */
+  workspaceFolderColorDefault: string;
+  folderColorLabel: (id: string) => string;
   sortNameAsc: string;
   sortNameDesc: string;
   sortModifiedDesc: string;

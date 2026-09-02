@@ -6,6 +6,7 @@ import { SIDEBAR_WIDTH_MIN, SIDEBAR_WIDTH_MAX } from '../composables/useSettings
 import WorkspaceSection from './WorkspaceSection.vue';
 import WorkspaceContextMenu, { type WorkspaceContextAction } from './WorkspaceContextMenu.vue';
 import WorkspaceSortMenu from './WorkspaceSortMenu.vue';
+import WorkspaceColorMenu from './WorkspaceColorMenu.vue';
 import WorkspaceInputDialog from './WorkspaceInputDialog.vue';
 import WorkspaceConfirmDialog from './WorkspaceConfirmDialog.vue';
 import type { WorkspaceSortMode } from '../utils/workspace-sort';
@@ -92,6 +93,19 @@ function onSortMenuSelect(mode: WorkspaceSortMode | null) {
   }
 }
 
+// ===== Folder colour menu state =====
+// Only ever opened for a folder, from the context menu, so it carries the
+// folder path rather than a scope like the sort menu does.
+const colorMenu = ref<{ x: number; y: number; folderPath: string } | null>(null);
+
+const colorMenuCurrent = computed<string | null>(() =>
+  colorMenu.value ? ws.folderColorFor(colorMenu.value.folderPath) : null,
+);
+
+function onColorMenuSelect(hex: string | null) {
+  if (colorMenu.value) ws.setFolderColor(colorMenu.value.folderPath, hex);
+}
+
 // ===== Context menu state (right-click on tree node) =====
 const ctxX = ref(0);
 const ctxY = ref(0);
@@ -157,6 +171,11 @@ async function onContextAction(action: WorkspaceContextAction) {
     if (node.kind !== 'folder') return;
     // Reopen as the sort menu at the same spot the context menu was.
     sortMenu.value = { scope: 'folder', x: ctxX.value, y: ctxY.value, folderPath: node.path };
+    return;
+  }
+  if (action === 'folder-color') {
+    if (node.kind !== 'folder') return;
+    colorMenu.value = { x: ctxX.value, y: ctxY.value, folderPath: node.path };
     return;
   }
   if (action === 'copy-path') {
@@ -784,6 +803,15 @@ onBeforeUnmount(() => {
       :has-override="sortMenuHasOverride"
       @select="onSortMenuSelect"
       @close="sortMenu = null"
+    />
+
+    <WorkspaceColorMenu
+      v-if="colorMenu"
+      :x="colorMenu.x"
+      :y="colorMenu.y"
+      :current="colorMenuCurrent"
+      @select="onColorMenuSelect"
+      @close="colorMenu = null"
     />
 
     <!-- Styled prompts replacing native window.prompt / confirm -->

@@ -16,6 +16,7 @@ vi.mock('@tauri-apps/api/window', () => ({
 
 import { useWorkspace, type WorkspaceNode } from '../../composables/useWorkspace';
 import { useSettings, RECENT_WORKSPACES_LIMIT, OPEN_WORKSPACES_LIMIT } from '../../composables/useSettings';
+import { FOLDER_COLORS } from '../../utils/folder-colors';
 
 function makeFolderNode(path: string): WorkspaceNode {
   return { name: path, path, kind: 'folder', children: [] };
@@ -28,6 +29,7 @@ function resetWorkspaceState() {
   settings.value.workspace.recentRoots = [];
   settings.value.workspace.sidebarVisible = true;
   settings.value.workspace.sidebarWidth = 240;
+  settings.value.workspace.folderColors = {};
   // Module-level tree-view state must also be reset between tests since
   // `useWorkspace` is a singleton.
   const ws = useWorkspace();
@@ -263,6 +265,82 @@ describe('useWorkspace', () => {
       await ws.revealInOs('/r/a.md');
       expect(invokeMock).toHaveBeenCalledTimes(1);
       expect(invokeMock).toHaveBeenCalledWith('reveal_in_os', { path: '/r/a.md' });
+    });
+  });
+
+  describe('folder colours', () => {
+    it('has no colour until one is chosen', () => {
+      const ws = useWorkspace();
+
+      expect(ws.folderColorFor('/notes/Boat')).toBeNull();
+    });
+
+    it('remembers a chosen colour for that folder alone', () => {
+      const ws = useWorkspace();
+
+      ws.setFolderColor('/notes/Boat', FOLDER_COLORS[0].hex);
+
+      expect(ws.folderColorFor('/notes/Boat')).toBe(FOLDER_COLORS[0].hex);
+      expect(ws.folderColorFor('/notes/Other')).toBeNull();
+    });
+
+    // Colouring a folder to mark it out would lose that meaning if the colour
+    // spread to everything inside it.
+    it('does not pass the colour down to subfolders', () => {
+      const ws = useWorkspace();
+
+      ws.setFolderColor('/notes/Boat', FOLDER_COLORS[0].hex);
+
+      expect(ws.folderColorFor('/notes/Boat/engine')).toBeNull();
+    });
+
+    it('clears the colour when passed null', () => {
+      const ws = useWorkspace();
+
+      ws.setFolderColor('/notes/Boat', FOLDER_COLORS[0].hex);
+      ws.setFolderColor('/notes/Boat', null);
+
+      expect(ws.folderColorFor('/notes/Boat')).toBeNull();
+    });
+
+    it('ignores a colour that is not in the palette', () => {
+      const ws = useWorkspace();
+
+      ws.setFolderColor('/notes/Boat', '#123456');
+
+      expect(ws.folderColorFor('/notes/Boat')).toBeNull();
+    });
+
+    it('survives settings saved before folder colours existed', () => {
+      const ws = useWorkspace();
+      const { settings } = useSettings();
+      // An older install has no such key at all.
+      delete (settings.value.workspace as { folderColors?: unknown }).folderColors;
+
+      expect(ws.folderColorFor('/notes/Boat')).toBeNull();
+      expect(() => ws.setFolderColor('/notes/Boat', FOLDER_COLORS[1].hex)).not.toThrow();
+      expect(ws.folderColorFor('/notes/Boat')).toBe(FOLDER_COLORS[1].hex);
+    });
+
+    it('keeps the colour when the folder is renamed', async () => {
+      const ws = useWorkspace();
+      ws.setFolderColor('/notes/Bat', FOLDER_COLORS[0].hex);
+
+      invokeMock.mockResolvedValue(undefined);
+      await ws.renamePath('/notes/Bat', '/notes/Boat');
+
+      expect(ws.folderColorFor('/notes/Boat')).toBe(FOLDER_COLORS[0].hex);
+      expect(ws.folderColorFor('/notes/Bat')).toBeNull();
+    });
+
+    it('keeps the colours of subfolders when a parent is renamed', async () => {
+      const ws = useWorkspace();
+      ws.setFolderColor('/notes/Web/partner', FOLDER_COLORS[2].hex);
+
+      invokeMock.mockResolvedValue(undefined);
+      await ws.renamePath('/notes/Web', '/notes/Frontend');
+
+      expect(ws.folderColorFor('/notes/Frontend/partner')).toBe(FOLDER_COLORS[2].hex);
     });
   });
 
