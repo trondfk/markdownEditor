@@ -46,10 +46,9 @@
       },
       "nsis": {
         "languages": [
-          "English",
-          "Norwegian"
+          "English"
         ],
-        "displayLanguageSelector": true,
+        "displayLanguageSelector": false,
         "installMode": "perMachine"
       }
     },
