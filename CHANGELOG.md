@@ -6,7 +6,7 @@
 
 # Release v0.7.4: Text highlighting, Norwegian, and a fix for disappearing text
 
-This is the first release from the independent fork at `trondfk/markdownEditor`. Updates are fetched from this repository and signed with its own key, so the app will offer this release even if you installed an earlier build from upstream.
+This is the first release from the independent fork at `trondfk/markdownEditor`. Builds from here check this repository for updates and are signed with its own key. An installation from the upstream project keeps following upstream, so moving to this fork means installing it once by hand.
 
 ## Features
 
