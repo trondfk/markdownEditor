@@ -52,6 +52,15 @@ describe('CodeEditor virtualization (issue #129)', () => {
     expect(handle.getValue().length).toBe(big.length);
   });
 
+  it('exposes the CodeMirror scroller for split-pane scroll sync', async () => {
+    const wrapper = mount(CodeEditor, { props: { modelValue: 'a\nb' } });
+    await nextTick();
+    const handle = (wrapper.vm as unknown as { editor: { getScrollElement: () => HTMLElement | null } }).editor;
+    const scroller = handle.getScrollElement();
+    expect(scroller).toBeTruthy();
+    expect(scroller?.classList.contains('cm-scroller')).toBe(true);
+  });
+
   it('highlights Markdown syntax inside the virtualized viewport', async () => {
     const wrapper = mount(CodeEditor, {
       props: { modelValue: '# Heading\n\n- **Bold** and [link](https://example.com)\n\n`code`' },

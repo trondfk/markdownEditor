@@ -421,6 +421,7 @@ async function runStream(
 
   const unlisten = await aiCommands.onStream(requestId, (chunk: AiResponseChunk) => {
     if (chunk.kind === 'tool_request') noteChunk(chunk.tool);
+    else if (chunk.kind === 'thinking') noteChunk('thinking');
     else noteChunk();
     onChunk(chunk, finish);
   });
@@ -490,6 +491,8 @@ export function useAi() {
         switch (chunk.kind) {
           case 'text':
             if (a) a.text += chunk.content;
+            break;
+          case 'thinking':
             break;
           case 'tool_request': {
             const tt = store.value.threads.find(th => th.id === targetThreadId);
@@ -570,6 +573,8 @@ export function useAi() {
           switch (chunk.kind) {
             case 'text':
               text += chunk.content;
+              break;
+            case 'thinking':
               break;
             case 'done':
               finish();

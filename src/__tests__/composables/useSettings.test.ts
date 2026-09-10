@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { useSettings, OLLAMA_DEFAULT_NUM_CTX, OLLAMA_MIN_NUM_CTX } from '../../composables/useSettings';
+import { useSettings, OLLAMA_DEFAULT_NUM_CTX, OLLAMA_MIN_NUM_CTX, migrateEditorPadding } from '../../composables/useSettings';
 
 // Mock localStorage
 const localStorageMock = (() => {
@@ -275,5 +275,26 @@ describe('useSettings', () => {
       expect(settings.value.ai.ollamaNumCtx).toBe(4096);
       setAiOllamaNumCtx(OLLAMA_DEFAULT_NUM_CTX);
     });
+  });
+});
+
+describe('migrateEditorPadding', () => {
+  it('lifts the old factory 16/24/32 padding', () => {
+    const s = { editorPaddingTop: 16, editorPaddingX: 24, editorPaddingBottom: 32 };
+    migrateEditorPadding(s);
+    expect(s).toEqual({ editorPaddingTop: 32, editorPaddingX: 80, editorPaddingBottom: 48 });
+  });
+
+  it('lifts the previous factory side padding of 40px', () => {
+    const s = { editorPaddingTop: 32, editorPaddingX: 40, editorPaddingBottom: 48 };
+    migrateEditorPadding(s);
+    expect(s).toEqual({ editorPaddingTop: 32, editorPaddingX: 80, editorPaddingBottom: 48 });
+  });
+
+  it('leaves custom slider values alone', () => {
+    const s = { editorPaddingTop: 20, editorPaddingX: 24, editorPaddingBottom: 32 };
+    migrateEditorPadding(s);
+    expect(s.editorPaddingTop).toBe(20);
+    expect(s.editorPaddingX).toBe(24);
   });
 });

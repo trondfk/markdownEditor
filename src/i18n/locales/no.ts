@@ -404,7 +404,7 @@ const no: Translations = {
   aiModel: 'Modell',
   aiModelPicker: 'Modell og innsats',
   aiEmptyHint: 'Spør meg om hva som helst i dette dokumentet.',
-  aiEmptyKeyHint: 'Ctrl+Enter for å sende.',
+  aiEmptyKeyHint: 'Enter for å sende. Shift+Enter for ny linje.',
   aiContextNearlyFull: 'Konteksten er nesten full: tidligere turer blir oppsummert automatisk for å gi plass.',
   aiModelMissing: 'Velg en modell først (modellvelgeren ved inntaket eller Innstillinger → AI).',
   aiEffort: 'Innsats',

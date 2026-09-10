@@ -2,8 +2,9 @@
 //!
 //! Unlike claude/codex (child processes whose stdout we pump), Ollama exposes
 //! a local HTTP API. `POST {base}/api/chat` streams newline-delimited JSON:
-//! each line carries a `message.content` delta until a final `done:true` line
-//! that includes `prompt_eval_count` / `eval_count` token counts.
+//! each line carries a `message.content` delta (or `message.thinking` for
+//! reasoning models) until a final `done:true` line that includes
+//! `prompt_eval_count` / `eval_count` token counts.
 //!
 //! Because reqwest's `bytes_stream` yields arbitrary byte chunks rather than
 //! whole lines, we buffer and split on '\n' ourselves before parsing each line
@@ -327,9 +328,10 @@ struct RoundOutcome {
     error: Option<String>,
 }
 
-/// Fold one NDJSON line into the round state. Returns the text delta to emit
-/// live, when the line carried one.
-fn apply_round_line(out: &mut RoundOutcome, line: &str) -> Option<String> {
+/// Fold one NDJSON line into the round state. Returns a live chunk to emit
+/// (text or thinking). Thinking deltas keep the stall timer alive without
+/// joining the visible answer.
+fn apply_round_line(out: &mut RoundOutcome, line: &str) -> Option<AiResponseChunk> {
     let line = line.trim();
     if line.is_empty() {
         return None;
@@ -341,7 +343,7 @@ fn apply_round_line(out: &mut RoundOutcome, line: &str) -> Option<String> {
         out.error = Some(err.to_string());
         return None;
     }
-    let mut delta = None;
+    let mut emit = None;
     if let Some(message) = v.get("message") {
         if let Some(content) = message
             .get("content")
@@ -349,7 +351,14 @@ fn apply_round_line(out: &mut RoundOutcome, line: &str) -> Option<String> {
             .filter(|c| !c.is_empty())
         {
             out.content.push_str(content);
-            delta = Some(content.to_string());
+            emit = Some(AiResponseChunk::Text { content: content.to_string() });
+        } else if message
+            .get("thinking")
+            .and_then(|c| c.as_str())
+            .filter(|c| !c.is_empty())
+            .is_some()
+        {
+            emit = Some(AiResponseChunk::Thinking);
         }
         if let Some(calls) = message.get("tool_calls").and_then(|c| c.as_array()) {
             out.tool_calls.extend(calls.iter().cloned());
@@ -358,7 +367,7 @@ fn apply_round_line(out: &mut RoundOutcome, line: &str) -> Option<String> {
     if v.get("done").and_then(|d| d.as_bool()).unwrap_or(false) {
         out.usage = renamed_usage(&v);
     }
-    delta
+    emit
 }
 
 /// Pump one round's NDJSON stream: emit Text deltas live, collect tool calls
@@ -378,8 +387,8 @@ async fn stream_round(
         match chunk {
             Ok(bytes) => {
                 for line in buf.feed(&bytes) {
-                    if let Some(text) = apply_round_line(&mut out, &line) {
-                        let _ = app.emit_to(window_label, event, AiResponseChunk::Text { content: text });
+                    if let Some(chunk) = apply_round_line(&mut out, &line) {
+                        let _ = app.emit_to(window_label, event, chunk);
                     }
                     if let Some(message) = out.error.take() {
                         emit_error(app, window_label, event, terminal, message);
@@ -393,8 +402,8 @@ async fn stream_round(
             }
         }
     }
-    if let Some(text) = apply_round_line(&mut out, &buf.remainder()) {
-        let _ = app.emit_to(window_label, event, AiResponseChunk::Text { content: text });
+    if let Some(chunk) = apply_round_line(&mut out, &buf.remainder()) {
+        let _ = app.emit_to(window_label, event, chunk);
     }
     if let Some(message) = out.error.take() {
         emit_error(app, window_label, event, terminal, message);
@@ -612,7 +621,10 @@ mod tests {
             &mut out,
             r#"{"message":{"role":"assistant","content":"Hi "},"done":false}"#,
         );
-        assert_eq!(delta.as_deref(), Some("Hi "));
+        match delta {
+            Some(AiResponseChunk::Text { content }) => assert_eq!(content, "Hi "),
+            other => panic!("expected text, got {:?}", other),
+        }
         let delta = apply_round_line(
             &mut out,
             r#"{"message":{"content":"","tool_calls":[{"function":{"name":"read_file","arguments":{"path":"/a"}}}]},"done":false}"#,
@@ -642,5 +654,18 @@ mod tests {
         assert!(out.error.is_none());
         assert!(apply_round_line(&mut out, r#"{"error":"model does not support tools"}"#).is_none());
         assert_eq!(out.error.as_deref(), Some("model does not support tools"));
+    }
+
+    #[test]
+    fn apply_round_line_thinking_delta_does_not_join_content() {
+        let mut out = RoundOutcome::default();
+        match apply_round_line(
+            &mut out,
+            r#"{"message":{"role":"assistant","content":"","thinking":"Hmm"},"done":false}"#,
+        ) {
+            Some(AiResponseChunk::Thinking) => {}
+            other => panic!("expected Thinking, got {:?}", other),
+        }
+        assert_eq!(out.content, "");
     }
 }

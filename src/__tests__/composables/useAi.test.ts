@@ -274,4 +274,33 @@ describe('useAi', () => {
     expect(messages.value[1].error).toMatch(/stalled/i);
     vi.useRealTimers();
   });
+
+  it('does not stall while thinking chunks keep arriving', async () => {
+    vi.useFakeTimers();
+    (aiCommands.send as unknown as { mockResolvedValue: (v: unknown) => void }).mockResolvedValue('req');
+    const { send, isSending, messages } = useAi();
+    const promise = send({
+      cli: 'ollama', sessionId: null, model: 'qwen3:8b', effort: null, prompt: 'hi', preamble: 'p', turnContext: '',
+      accessMap: { readPaths: [], writePaths: [], tools: { bash: false, network: false, fileRead: false, fileWrite: false } },
+      workDir: '/x',
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    lastHandler!({ kind: 'thinking' });
+    await vi.advanceTimersByTimeAsync(90_000);
+    lastHandler!({ kind: 'thinking' });
+    await vi.advanceTimersByTimeAsync(90_000);
+    lastHandler!({ kind: 'thinking' });
+    await vi.advanceTimersByTimeAsync(90_000);
+    expect(isSending.value).toBe(true);
+    expect(messages.value[1].text).toBe('');
+    expect(messages.value[1].error).toBeUndefined();
+    lastHandler!({ kind: 'text', content: 'plan' });
+    lastHandler!({ kind: 'done', sessionId: '', usage: null });
+    await promise;
+    expect(isSending.value).toBe(false);
+    expect(messages.value[1].text).toBe('plan');
+    vi.useRealTimers();
+  });
 });

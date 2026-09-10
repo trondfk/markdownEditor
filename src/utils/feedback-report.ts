@@ -83,18 +83,22 @@ export function buildGitHubIssueUrl(title: string, body: string): string {
   return `https://github.com/${FEEDBACK_GITHUB_REPO}/issues/new?${params.toString()}`;
 }
 
-/** Empty To lets the mail client prompt. Set this if the team has a shared inbox. */
+/** Empty To lets the mail client prompt. A local-part is required: Tauri's
+ *  `shell:allow-open` rejects `mailto:?…` (no word after the scheme). */
 export const FEEDBACK_EMAIL = '';
+
+const MAILTO_PLACEHOLDER = 'compose';
 
 /** mailto: cannot carry attachments; keep the body short and rely on the clipboard. */
 const MAILTO_BODY_MAX = 1800;
 
 export function buildMailtoUrl(to: string, subject: string, body: string): string {
+  const local = to.trim() || MAILTO_PLACEHOLDER;
   const params = new URLSearchParams({
     subject: subject.trim() || 'Bug report from MerMark',
     body: body.slice(0, MAILTO_BODY_MAX),
   });
-  return `mailto:${to}?${params.toString()}`;
+  return `mailto:${local}?${params.toString()}`;
 }
 
 export interface EmlAttachment {

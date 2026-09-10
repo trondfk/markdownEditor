@@ -105,6 +105,10 @@ pub struct AuditEntry {
 pub enum AiResponseChunk {
     /// Streamed text content.
     Text { content: String },
+    /// Reasoning delta with no visible text. Keeps the stall timer alive for
+    /// thinking models (Qwen3, etc.) without dumping the chain of thought into
+    /// the chat bubble.
+    Thinking,
     /// AI requested a tool call (frontend may need to confirm if bypass off).
     ToolRequest {
         tool: String,

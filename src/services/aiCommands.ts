@@ -91,6 +91,7 @@ export interface AiSendRequest {
 
 export type AiResponseChunk =
   | { kind: 'text'; content: string }
+  | { kind: 'thinking' }
   | { kind: 'tool_request'; tool: string; args: unknown; requestId: string }
   | { kind: 'tool_denied'; tool: string; reason: string }
   | { kind: 'done'; sessionId: string; usage: unknown | null }

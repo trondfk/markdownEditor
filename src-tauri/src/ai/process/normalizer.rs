@@ -353,8 +353,11 @@ fn parse_codex_stateful(
 /// Ollama `/api/chat` streams newline-delimited JSON. Non-final lines carry
 /// `{"message":{"role":"assistant","content":"<delta>"}, "done":false}`; the
 /// final line carries `{"done":true, "prompt_eval_count":N, "eval_count":M}`.
-/// We rename `prompt_eval_count` → `input_tokens` and `eval_count` →
-/// `output_tokens` so the usage payload matches what `parseUsage` expects.
+/// Thinking models (Qwen3 and similar) stream `message.thinking` while
+/// `content` stays empty; those deltas become `Thinking` so the UI stall
+/// watchdog does not cancel a live generate. We rename `prompt_eval_count`
+/// → `input_tokens` and `eval_count` → `output_tokens` so the usage payload
+/// matches what `parseUsage` expects.
 pub fn parse_line_ollama(line: &str) -> Option<AiResponseChunk> {
     let v: serde_json::Value = serde_json::from_str(line).ok()?;
     parse_ollama(&v)
@@ -371,15 +374,22 @@ fn parse_ollama(v: &serde_json::Value) -> Option<AiResponseChunk> {
         let usage = serde_json::json!({ "input_tokens": input, "output_tokens": output });
         return Some(AiResponseChunk::Done { session_id: String::new(), usage: Some(usage) });
     }
-    let content = v
-        .get("message")
+    let message = v.get("message");
+    let content = message
         .and_then(|m| m.get("content"))
         .and_then(|c| c.as_str())
         .unwrap_or("");
-    if content.is_empty() {
-        None
+    if !content.is_empty() {
+        return Some(AiResponseChunk::Text { content: content.to_string() });
+    }
+    let thinking = message
+        .and_then(|m| m.get("thinking"))
+        .and_then(|c| c.as_str())
+        .unwrap_or("");
+    if !thinking.is_empty() {
+        Some(AiResponseChunk::Thinking)
     } else {
-        Some(AiResponseChunk::Text { content: content.to_string() })
+        None
     }
 }
 
@@ -420,9 +430,10 @@ pub struct OpenaiParserState {
 ///                           expects, mirroring the ollama
 ///                           prompt_eval_count/eval_count rename); the frame's
 ///                           delta is still processed.
-///   - `choices[0].delta.content` → Text. A role-only or `reasoning_content`-
-///                           only delta (no `content`) is dropped (MVP ignores
-///                           reasoning content rather than rendering it).
+///   - `choices[0].delta.content` → Text. A `reasoning_content`-only delta
+///                           (no `content`) becomes `Thinking` so the stall
+///                           timer keeps running; the chain of thought is
+///                           not rendered.
 pub fn parse_line_openai(state: &mut OpenaiParserState, line: &str) -> Option<AiResponseChunk> {
     let line = line.trim();
     if line.is_empty() {
@@ -459,10 +470,21 @@ fn parse_openai(state: &mut OpenaiParserState, v: &serde_json::Value) -> Option<
         .and_then(|d| d.get("content"))
         .and_then(|c| c.as_str())
         .unwrap_or("");
-    if content.is_empty() {
-        None
+    if !content.is_empty() {
+        return Some(AiResponseChunk::Text { content: content.to_string() });
+    }
+    let reasoning = v
+        .get("choices")
+        .and_then(|c| c.as_array())
+        .and_then(|arr| arr.first())
+        .and_then(|c| c.get("delta"))
+        .and_then(|d| d.get("reasoning_content"))
+        .and_then(|c| c.as_str())
+        .unwrap_or("");
+    if !reasoning.is_empty() {
+        Some(AiResponseChunk::Thinking)
     } else {
-        Some(AiResponseChunk::Text { content: content.to_string() })
+        None
     }
 }
 
@@ -855,6 +877,15 @@ mod tests {
         assert!(parse_ollama_tags(&v).is_empty());
     }
 
+    #[test]
+    fn ollama_thinking_delta_emits_thinking() {
+        let line = r#"{"message":{"role":"assistant","content":"","thinking":"The user asked..."},"done":false}"#;
+        match parse_line_ollama(line).unwrap() {
+            AiResponseChunk::Thinking => {}
+            other => panic!("expected Thinking, got {:?}", other),
+        }
+    }
+
     fn fresh_openai() -> OpenaiParserState { OpenaiParserState::default() }
 
     #[test]
@@ -884,9 +915,12 @@ mod tests {
     }
 
     #[test]
-    fn openai_reasoning_content_only_delta_is_dropped() {
+    fn openai_reasoning_content_only_delta_emits_thinking() {
         let line = r#"data: {"choices":[{"delta":{"reasoning_content":"thinking..."}}]}"#;
-        assert!(parse_line_openai(&mut fresh_openai(), line).is_none());
+        match parse_line_openai(&mut fresh_openai(), line).unwrap() {
+            AiResponseChunk::Thinking => {}
+            other => panic!("expected Thinking, got {:?}", other),
+        }
     }
 
     #[test]

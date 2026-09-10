@@ -63,6 +63,7 @@ describe('feedback-report', () => {
     expect(url.startsWith('mailto:')).toBe(true);
     expect(url).toContain('Hang');
     expect(url).toContain('details');
+    expect(url).toMatch(/^mailto:\w+\?/);
   });
 
   it('encodes non-ascii subjects for eml', () => {

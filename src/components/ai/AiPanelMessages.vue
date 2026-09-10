@@ -54,7 +54,8 @@ const workingLabel = computed(() => {
   if (props.isStalled) return t.value.aiWorkingStalled;
   if (props.sendStartedAt) {
     const elapsed = formatElapsed(now.value - props.sendStartedAt);
-    return t.value.aiWorkingElapsed(elapsed, props.lastToolName ?? '');
+    const tool = props.lastToolName === 'thinking' ? t.value.aiThinking : (props.lastToolName ?? '');
+    return t.value.aiWorkingElapsed(elapsed, tool);
   }
   return t.value.aiWorkingPlease;
 });

@@ -243,7 +243,11 @@ async function onOpenIssue() {
     userTitle: title.value,
     userBody: body.value,
   }, diag, shotNote);
-  await openExternal(buildGitHubIssueUrl(title.value, issueBody));
+  try {
+    await openExternal(buildGitHubIssueUrl(title.value, issueBody));
+  } catch (e) {
+    console.error('[FeedbackModal] open GitHub issue failed:', e);
+  }
 }
 
 async function onOpenEmail() {
@@ -252,7 +256,11 @@ async function onOpenEmail() {
   const subject = title.value.trim() || 'Bug report from MerMark';
   if (shots.value.length === 0) {
     copiedKind.value = 'email';
-    await openExternal(buildMailtoUrl(FEEDBACK_EMAIL, subject, text));
+    try {
+      await openExternal(buildMailtoUrl(FEEDBACK_EMAIL, subject, text));
+    } catch (e) {
+      console.error('[FeedbackModal] open email failed:', e);
+    }
     return;
   }
   try {

@@ -207,6 +207,40 @@ export const EDITOR_PAD_BOTTOM_MIN = 0;
 export const EDITOR_PAD_BOTTOM_MAX = 160;
 export const EDITOR_PAD_X_MIN = 0;
 export const EDITOR_PAD_X_MAX = 160;
+export const EDITOR_PAD_TOP_DEFAULT = 32;
+export const EDITOR_PAD_BOTTOM_DEFAULT = 48;
+export const EDITOR_PAD_X_DEFAULT = 80;
+
+/** Factory padding from before the looser page margins. */
+const LEGACY_EDITOR_PAD_TOP = 16;
+const LEGACY_EDITOR_PAD_BOTTOM = 32;
+const LEGACY_EDITOR_PAD_X = 24;
+const PREVIOUS_EDITOR_PAD_X = 40;
+
+/** Lift old factory padding once so existing installs pick up the extra air. Custom slider values stay. */
+export function migrateEditorPadding(s: {
+  editorPaddingTop: number;
+  editorPaddingBottom: number;
+  editorPaddingX: number;
+}): void {
+  if (
+    s.editorPaddingTop === LEGACY_EDITOR_PAD_TOP
+    && s.editorPaddingBottom === LEGACY_EDITOR_PAD_BOTTOM
+    && s.editorPaddingX === LEGACY_EDITOR_PAD_X
+  ) {
+    s.editorPaddingTop = EDITOR_PAD_TOP_DEFAULT;
+    s.editorPaddingBottom = EDITOR_PAD_BOTTOM_DEFAULT;
+    s.editorPaddingX = EDITOR_PAD_X_DEFAULT;
+    return;
+  }
+  if (
+    s.editorPaddingTop === EDITOR_PAD_TOP_DEFAULT
+    && s.editorPaddingBottom === EDITOR_PAD_BOTTOM_DEFAULT
+    && s.editorPaddingX === PREVIOUS_EDITOR_PAD_X
+  ) {
+    s.editorPaddingX = EDITOR_PAD_X_DEFAULT;
+  }
+}
 
 const STORAGE_KEY = 'mermark-settings';
 
@@ -376,6 +410,7 @@ function loadSettings(): AppSettings {
       if (!Array.isArray(merged.enabledReadFormatIds) || merged.enabledReadFormatIds.length === 0) {
         merged.enabledReadFormatIds = BUILTIN_MERMAID_FORMATS.map((f) => f.id);
       }
+      migrateEditorPadding(merged);
       return merged;
     }
   } catch (error) {
@@ -400,9 +435,9 @@ function getDefaultSettings(): AppSettings {
     expandTabs: false,
     showLineNumbers: false,
     leftBarExpanded: false,
-    editorPaddingTop: 16,
-    editorPaddingBottom: 32,
-    editorPaddingX: 24,
+    editorPaddingTop: EDITOR_PAD_TOP_DEFAULT,
+    editorPaddingBottom: EDITOR_PAD_BOTTOM_DEFAULT,
+    editorPaddingX: EDITOR_PAD_X_DEFAULT,
     mermaidFenceOpen: DEFAULT_MERMAID_DELIMITERS.open,
     mermaidFenceClose: DEFAULT_MERMAID_DELIMITERS.close,
     mermaidWriteFormatId: STANDARD_FORMAT_ID,
@@ -868,6 +903,7 @@ function applyCodeThemeVars(root: CSSStyleDeclaration, theme: CodeThemeMode) {
 
 // Apply all CSS custom properties to document root
 function applyCssVars(s: AppSettings) {
+  migrateEditorPadding(s);
   const root = document.documentElement.style;
   if (s.editorFontFamily === 'system') {
     root.removeProperty('--editor-font-family');
@@ -876,11 +912,11 @@ function applyCssVars(s: AppSettings) {
   }
   root.setProperty('--code-font-family', resolveCodeFont(s.codeFontFamily));
   root.setProperty('--editor-line-height', `${s.editorLineHeight}`);
-  // Editor surface paddings — picked up by the Minimal theme via
-  // `padding: var(--editor-pad-top) var(--editor-pad-x) ...`.
-  root.setProperty('--editor-pad-top', `${s.editorPaddingTop ?? 16}px`);
-  root.setProperty('--editor-pad-bottom', `${s.editorPaddingBottom ?? 32}px`);
-  root.setProperty('--editor-pad-x', `${s.editorPaddingX ?? 24}px`);
+  // Editor surface paddings. Used by `.editor-content` / `.tiptap` in Editor.vue
+  // for every theme variant (default and minimal).
+  root.setProperty('--editor-pad-top', `${s.editorPaddingTop ?? EDITOR_PAD_TOP_DEFAULT}px`);
+  root.setProperty('--editor-pad-bottom', `${s.editorPaddingBottom ?? EDITOR_PAD_BOTTOM_DEFAULT}px`);
+  root.setProperty('--editor-pad-x', `${s.editorPaddingX ?? EDITOR_PAD_X_DEFAULT}px`);
   applyCodeThemeVars(root, s.codeTheme);
 }
 

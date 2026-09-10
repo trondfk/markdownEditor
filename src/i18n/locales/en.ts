@@ -404,7 +404,7 @@ const en: Translations = {
   aiModel: 'Model',
   aiModelPicker: 'Model and effort',
   aiEmptyHint: 'Ask me anything about this document.',
-  aiEmptyKeyHint: 'Ctrl+Enter to send.',
+  aiEmptyKeyHint: 'Enter to send. Shift+Enter for a new line.',
   aiContextNearlyFull: 'Context nearly full: earlier turns will be summarised automatically to make room.',
   aiModelMissing: 'Select a model first (the picker next to the input, or Settings → AI).',
   aiEffort: 'Effort',
