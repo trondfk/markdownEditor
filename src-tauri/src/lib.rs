@@ -830,6 +830,53 @@ fn reveal_in_os(path: String) -> Result<(), String> {
     Err("reveal_in_os: unsupported platform".into())
 }
 
+/// Open a file with the host OS default handler (used for .eml feedback drafts).
+#[tauri::command]
+fn open_in_os(path: String) -> Result<(), String> {
+    let target = Path::new(&path);
+    if !target.exists() {
+        return Err(format!("path does not exist: {}", path));
+    }
+    if !target.is_file() {
+        return Err(format!("path is not a file: {}", path));
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        // Avoid a flashing console window around `cmd /C start`.
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        let normalized = path.replace('/', "\\");
+        std::process::Command::new("cmd")
+            .args(["/C", "start", "", &normalized])
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn()
+            .map_err(|e| format!("start: {}", e))?;
+        return Ok(());
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(&path)
+            .spawn()
+            .map_err(|e| format!("open: {}", e))?;
+        return Ok(());
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(&path)
+            .spawn()
+            .map_err(|e| format!("xdg-open: {}", e))?;
+        return Ok(());
+    }
+
+    #[allow(unreachable_code)]
+    Err("open_in_os: unsupported platform".into())
+}
+
 /// List all font family names installed on the system.
 /// Returns a sorted, deduplicated list of font family names.
 #[tauri::command]
@@ -1035,6 +1082,7 @@ pub fn run() {
             delete_path,
             classify_paths,
             reveal_in_os,
+            open_in_os,
             search_workspace_content,
             ai_health_check,
             ai_ollama_models,
@@ -1225,6 +1273,19 @@ mod tests {
             windows_reveal_arg("C:/Users/edy/My Notes/a.md"),
             "/select,\"C:\\Users\\edy\\My Notes\\a.md\""
         );
+    }
+
+    #[test]
+    fn open_in_os_rejects_missing_path() {
+        let err = open_in_os("C:\\definitely\\missing-mermark.eml".into()).unwrap_err();
+        assert!(err.contains("does not exist"), "{err}");
+    }
+
+    #[test]
+    fn open_in_os_rejects_a_directory() {
+        let dir = std::env::temp_dir();
+        let err = open_in_os(dir.to_string_lossy().into_owned()).unwrap_err();
+        assert!(err.contains("not a file"), "{err}");
     }
 
     #[test]

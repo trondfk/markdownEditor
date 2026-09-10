@@ -1,0 +1,22 @@
+name: Bug report
+description: Report a problem in MerMark Editor
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you expect, and what did you see instead?
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics
+      description: Paste the copied report from MerMark (Rapportar feil / Report a problem). Do not paste secrets, notes, or full chat logs.
+      render: shell
+  - type: markdown
+    attributes:
+      value: |
+        Do not paste API keys, chat transcripts, or document content.

@@ -41,6 +41,7 @@ const emit = defineEmits<{
   compareTabs: [];
   showShortcuts: [];
   showSettings: [];
+  reportFeedback: [];
   toggleToc: [];
   toggleAi: [];
 }>();
@@ -83,6 +84,7 @@ const emit = defineEmits<{
         @compare-tabs="emit('compareTabs')"
         @show-shortcuts="emit('showShortcuts')"
         @show-settings="emit('showSettings')"
+        @report-feedback="emit('reportFeedback')"
         @toggle-toc="emit('toggleToc')"
         @toggle-ai="emit('toggleAi')"
       />

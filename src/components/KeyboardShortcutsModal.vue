@@ -1,8 +1,11 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted } from 'vue';
 import { useI18n } from '../i18n';
+import { useKeybinds } from '../composables/useKeybinds';
+import { formatChord } from '../data/keybindActions';
 
 const { t } = useI18n();
+const keybinds = useKeybinds();
 
 const emit = defineEmits<{
   close: [];
@@ -19,39 +22,29 @@ const formatKey = (key: string): string => {
     .replace(/\bAlt\b/g, '⌥');
 };
 
-const rawShortcuts = [
-  { key: 'Ctrl+N', action: () => t.value.new },
-  { key: 'Ctrl+O', action: () => t.value.open },
-  { key: 'Ctrl+S', action: () => t.value.save },
-  { key: 'Ctrl+Shift+S', action: () => t.value.saveAs },
+const extraShortcuts = [
   { key: 'Ctrl+R', action: () => t.value.reloadFile },
   { key: 'Ctrl+W', action: () => t.value.closeTab },
   { key: 'Ctrl+Tab', action: () => t.value.nextTab },
   { key: 'Ctrl+Shift+Tab', action: () => t.value.previousTab },
   { key: 'Ctrl+1…9', action: () => t.value.jumpToTab },
-  { key: 'Ctrl+P', action: () => t.value.exportPdf },
-  { key: 'Ctrl+,', action: () => t.value.settings },
-  { key: 'Ctrl+Shift+V', action: () => t.value.toggleCodeView },
-  { key: 'Ctrl+F', action: () => t.value.findInCurrentDocument },
-  { key: 'Ctrl+Shift+E', action: () => t.value.searchWorkspace },
-  { key: 'Ctrl++ / Ctrl+-', action: () => t.value.zoomInOut },
-  { key: 'Ctrl+0', action: () => t.value.resetZoom },
-  { key: 'Ctrl+Z', action: () => t.value.undo },
-  { key: 'Ctrl+Y', action: () => t.value.redo },
   { key: 'Alt+Up', action: () => t.value.moveLineUp },
   { key: 'Alt+Down', action: () => t.value.moveLineDown },
-  { key: 'Ctrl+B', action: () => t.value.bold },
-  { key: 'Ctrl+I', action: () => t.value.italic },
-  { key: 'Ctrl+Shift+D', action: () => t.value.changes },
-  { key: 'Ctrl+Shift+C', action: () => t.value.compareTabs },
-  { key: 'Ctrl+Shift+T', action: () => t.value.tableOfContents },
-  { key: 'Ctrl+/', action: () => t.value.keyboardShortcuts },
   { key: 'Escape', action: () => t.value.close },
 ];
 
-const shortcuts = computed(() =>
-  rawShortcuts.map(s => ({ key: formatKey(s.key), action: s.action }))
-);
+const shortcuts = computed(() => {
+  const fromMap = keybinds.actions
+    .filter(a => keybinds.bindingFor(a.id))
+    .map(a => {
+      const dict = t.value as unknown as Record<string, string>;
+      return {
+        key: formatKey(formatChord(keybinds.bindingFor(a.id))),
+        action: () => dict[a.labelKey] || a.id,
+      };
+    });
+  return [...fromMap, ...extraShortcuts.map(s => ({ key: formatKey(s.key), action: s.action }))];
+});
 
 const handleKeydown = (e: KeyboardEvent) => {
   if (e.key === 'Escape') {

@@ -27,6 +27,7 @@ import DiffPreview from './components/DiffPreview.vue';
 import TableOfContents from './components/TableOfContents.vue';
 import KeyboardShortcutsModal from './components/KeyboardShortcutsModal.vue';
 import SettingsModal from './components/SettingsModal.vue';
+import FeedbackModal from './components/FeedbackModal.vue';
 import WhatsNewModal from './components/WhatsNewModal.vue';
 import ChangelogModal from './components/ChangelogModal.vue';
 import WorkspaceSidebar from './components/WorkspaceSidebar.vue';
@@ -63,6 +64,9 @@ import { useTabDrag } from './composables/useTabDrag';
 import { useEditorZoom } from './composables/useEditorZoom';
 import { useFileReload } from './composables/useFileReload';
 import { useLayoutConfig } from './composables/useLayoutConfig';
+import { useKeybinds } from './composables/useKeybinds';
+import { useToolbarActions } from './composables/useToolbarActions';
+import { KEYBIND_ACTIONS } from './data/keybindActions';
 import { useSessionRestore } from './composables/useSessionRestore';
 import { useRecentFiles } from './composables/useRecentFiles';
 import { useWorkspace } from './composables/useWorkspace';
@@ -1228,9 +1232,11 @@ const toggleTocPanel = () => {
 
 // ============ Keyboard Shortcuts Modal ============
 const showShortcutsModal = ref(false);
-
-// ============ Settings Modal ============
 const showSettingsModal = ref(false);
+const showFeedbackModal = ref(false);
+
+const keybinds = useKeybinds();
+const toolbarActions = useToolbarActions();
 
 // ============ AI Panel ============
 const aiPanelOpen = ref(false);
@@ -1699,113 +1705,87 @@ const switchTabByIndex = (index: number) => {
   switchTab(pane.id, pane.tabs[index].id);
 };
 
+function isTypingSurface(event: KeyboardEvent): boolean {
+  const el = event.target as HTMLElement | null;
+  if (!el) return false;
+  const tag = el.tagName;
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true;
+  if (el.isContentEditable && !el.closest('.ProseMirror')) return true;
+  return false;
+}
+
+function dispatchAppKeybind(id: string) {
+  switch (id) {
+    case 'new-file': newFile(); break;
+    case 'open-file': openFileWithCrossWindowDialog(); break;
+    case 'save-file': saveFile(); break;
+    case 'save-file-as': saveFileAs(); break;
+    case 'export-pdf': openPdfDialog(); break;
+    case 'show-settings': showSettingsModal.value = true; break;
+    case 'show-shortcuts': showShortcutsModal.value = !showShortcutsModal.value; break;
+    case 'toggle-code-view': if (!splitEditorActive.value) toggleCodeView(); break;
+    case 'find-in-document': openDocumentSearch(); break;
+    case 'search-workspace': showWorkspaceQuickSwitcher.value = true; break;
+    case 'toggle-diff': if (canShowDiff.value) toggleDiffPreview(); break;
+    case 'compare-tabs': if (canCompareTabs.value) compareTabs(); break;
+    case 'toggle-toc': toggleTocPanel(); break;
+    case 'zoom-in': zoomIn(); break;
+    case 'zoom-out': zoomOut(); break;
+    case 'zoom-reset': resetZoom(); break;
+    case 'report-feedback': showFeedbackModal.value = true; break;
+  }
+}
+
 const handleKeyboard = (event: KeyboardEvent) => {
   const modifier = event.ctrlKey || event.metaKey;
 
   if (modifier) {
     const key = event.key.toLowerCase();
-
     if (key === 'tab') {
       event.preventDefault();
       switchTabByOffset(event.shiftKey ? -1 : 1);
       return;
     }
-
     if (!event.shiftKey && key >= '1' && key <= '9') {
       event.preventDefault();
       switchTabByIndex(Number(key) - 1);
       return;
     }
-
-    switch (key) {
-      case 'n':
-        event.preventDefault();
-        newFile();
-        break;
-      case 's':
-        event.preventDefault();
-        if (event.shiftKey) {
-          saveFileAs();
-        } else {
-          saveFile();
-        }
-        break;
-      case 'o':
-        event.preventDefault();
-        openFileWithCrossWindowDialog();
-        break;
-      case 'p':
-        event.preventDefault();
-        openPdfDialog();
-        break;
-      case 'd':
-        if (event.shiftKey && canShowDiff.value) {
-          event.preventDefault();
-          toggleDiffPreview();
-        }
-        break;
-      case 'c':
-        if (event.shiftKey && canCompareTabs.value) {
-          event.preventDefault();
-          compareTabs();
-        }
-        break;
-      case 't':
-        if (event.shiftKey) {
-          event.preventDefault();
-          toggleTocPanel();
-        }
-        break;
-      case 'r':
-        event.preventDefault();
-        manualReload();
-        break;
-      case 'e':
-        // Ctrl+Shift+E opens the workspace quick switcher (palette-style).
-        if (event.shiftKey) {
-          event.preventDefault();
-          showWorkspaceQuickSwitcher.value = true;
-        }
-        break;
-      case 'f':
-        event.preventDefault();
-        openDocumentSearch();
-        break;
-      case 'w':
-        if (activeTabId.value && activePaneId.value) {
-          event.preventDefault();
-          handleCloseTabRequest(activePaneId.value, activeTabId.value);
-        }
-        break;
-      case '=':
-      case '+':
-        event.preventDefault();
-        zoomIn();
-        break;
-      case '-':
-        event.preventDefault();
-        zoomOut();
-        break;
-      case '0':
-        event.preventDefault();
-        resetZoom();
-        break;
-      case ',':
-        event.preventDefault();
-        showSettingsModal.value = true;
-        break;
-      case 'v':
-        if (event.shiftKey && !splitEditorActive.value) {
-          event.preventDefault();
-          toggleCodeView();
-        }
-        break;
-      case '/':
-        event.preventDefault();
-        showShortcutsModal.value = !showShortcutsModal.value;
-        break;
+    if (key === 'w' && activeTabId.value && activePaneId.value) {
+      event.preventDefault();
+      handleCloseTabRequest(activePaneId.value, activeTabId.value);
+      return;
+    }
+    if (key === 'r') {
+      event.preventDefault();
+      manualReload();
+      return;
     }
   }
+
+  const actionId = keybinds.actionForEvent(event);
+  if (!actionId) {
+    if (modifier && (event.key === '+' || event.key === '=')) {
+      event.preventDefault();
+      zoomIn();
+    }
+    return;
+  }
+
+  const target = event.target as HTMLElement | null;
+  if (target?.closest?.('.kb-bind')) return;
+
+  const def = KEYBIND_ACTIONS.find(a => a.id === actionId);
+  if (def?.group === 'writing') {
+    if (isTypingSurface(event)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    toolbarActions.runWritingAction(actionId);
+    return;
+  }
+
+  event.preventDefault();
+  dispatchAppKeybind(actionId);
 };
 
 // ============ Lifecycle ============
@@ -1917,7 +1897,7 @@ const openFileWithCrossWindowDialog = async (): Promise<void> => {
 };
 
 onMounted(async () => {
-  window.addEventListener('keydown', handleKeyboard);
+  window.addEventListener('keydown', handleKeyboard, true);
   window.addEventListener('wheel', handleWheel, { passive: false });
 
   // Restore last opened workspace (if any). Silent on failure — composable
@@ -2097,7 +2077,7 @@ onMounted(async () => {
 });
 
 onUnmounted(async () => {
-  window.removeEventListener('keydown', handleKeyboard);
+  window.removeEventListener('keydown', handleKeyboard, true);
   window.removeEventListener('wheel', handleWheel);
   scrollSync.detach();
   marpScrollSync.detach();
@@ -2164,6 +2144,7 @@ onUnmounted(async () => {
       @compare-tabs="compareTabs"
       @show-shortcuts="showShortcutsModal = true"
       @show-settings="showSettingsModal = true"
+      @report-feedback="showFeedbackModal = true"
       @toggle-toc="toggleTocPanel"
       @toggle-ai="toggleAiPanel"
     />
@@ -2224,6 +2205,7 @@ onUnmounted(async () => {
         @compare-tabs="compareTabs"
         @show-shortcuts="showShortcutsModal = true"
         @show-settings="showSettingsModal = true"
+        @report-feedback="showFeedbackModal = true"
         @toggle-toc="toggleTocPanel"
         @toggle-ai="toggleAiPanel"
       />
@@ -2355,6 +2337,7 @@ onUnmounted(async () => {
         @apply-content="onAiApplyContent"
         @show-diff="onAiShowDiff"
         @link-click="handleLinkClick"
+        @report-feedback="showFeedbackModal = true"
       />
     </div>
 
@@ -2386,6 +2369,7 @@ onUnmounted(async () => {
       @compare-tabs="compareTabs"
       @show-shortcuts="showShortcutsModal = true"
       @show-settings="showSettingsModal = true"
+      @report-feedback="showFeedbackModal = true"
       @toggle-toc="toggleTocPanel"
       @toggle-ai="toggleAiPanel"
     />
@@ -2471,6 +2455,11 @@ onUnmounted(async () => {
     <KeyboardShortcutsModal
       v-if="showShortcutsModal"
       @close="showShortcutsModal = false"
+    />
+
+    <FeedbackModal
+      v-if="showFeedbackModal"
+      @close="showFeedbackModal = false"
     />
 
     <!-- Settings Modal -->

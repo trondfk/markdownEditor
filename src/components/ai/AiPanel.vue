@@ -2,7 +2,7 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { htmlToMarkdown } from '../../utils/markdown-converter';
 import { useI18n } from '../../i18n';
-import { useSettings, type CliKind } from '../../composables/useSettings';
+import { useSettings, PROJECT_INSTRUCTIONS_MAX, clampAiInstructions, type CliKind } from '../../composables/useSettings';
 import { useAi } from '../../composables/useAi';
 import { useAiSession } from '../../composables/useAiSession';
 import { useAiAccessMap } from '../../composables/useAiAccessMap';
@@ -14,18 +14,25 @@ import { useAiPanelLayout } from '../../composables/useAiPanelLayout';
 import { useAiToolToast } from '../../composables/useAiToolToast';
 import { useAiPinnedSelections } from '../../composables/useAiPinnedSelections';
 import { useAiPendingImages, type PendingImage } from '../../composables/useAiPendingImages';
-import { buildDocAttachment, buildStaticPreamble, buildTurnContext, hashPreamble, shouldSendStaticPreamble, type PreambleOptions } from '../../composables/useAiPreamble';
+import { buildDocAttachment, buildStaticPreamble, buildTurnContext, hashPreamble, shouldSendStaticPreamble, type AttachedRef, type PreambleOptions } from '../../composables/useAiPreamble';
 import { buildSummaryPrompt, shouldCompact } from '../../utils/ai-compaction';
 import { useAiMermaidTarget, extractMermaidCodeFromResponse } from '../../composables/useAiMermaidTarget';
-import { withWorkspaceReadAccess } from '../../composables/useAiWorkspaceContext';
+import { accessMapForSend } from '../../composables/useAiWorkspaceContext';
 import { buildMermaidBlockFor } from '../../utils/mermaid-formats';
 import { resolveMermaidWriteFormat, resolveMermaidReadFormats } from '../../composables/useSettings';
+import { capDocImages, extractLocalImageRefs, isWithinImageBudget, MAX_DOC_IMAGES_PER_TURN } from '../../utils/ai-doc-images';
+import { classifyAiTool, extractToolFilePath } from '../../utils/ai-tool-kind';
+import { ATTACHED_EXCERPT_MAX, flattenMentions, type MentionItem } from '../../utils/ai-mentions';
+import { workspaceFs } from '../../services/workspaceFs';
 import AiPanelTab from './AiPanelTab.vue';
 import AiPanelHeader from './AiPanelHeader.vue';
+import AiPanelModelPicker from './AiPanelModelPicker.vue';
 import AiPanelContextBar from './AiPanelContextBar.vue';
 import AiPanelStatusNotices from './AiPanelStatusNotices.vue';
 import AiPanelMessages from './AiPanelMessages.vue';
 import AiPanelComposer from './AiPanelComposer.vue';
+import AiPanelModeChips from './AiPanelModeChips.vue';
+import AiPanelGearSheet from './AiPanelGearSheet.vue';
 import AiAttachmentModal from './AiAttachmentModal.vue';
 import AiImagePreview from './AiImagePreview.vue';
 import AiToolToast from './AiToolToast.vue';
@@ -49,10 +56,11 @@ const emit = defineEmits<{
   applyContent: [content: string];
   showDiff: [orig: string, candidate: string];
   linkClick: [url: string];
+  reportFeedback: [];
 }>();
 
 const { t } = useI18n();
-const { settings, setAiDefaultCli, setAiDefaultModelClaude, setAiDefaultModelCodex, setAiDefaultModelOllama, setAiDefaultModelOpenai, setAiEffortClaude, setAiEffortCodex } = useSettings();
+const { settings, setAiDefaultCli, setAiDefaultModelClaude, setAiDefaultModelCodex, setAiDefaultModelOllama, setAiDefaultModelOpenai, setAiEffortClaude, setAiEffortCodex, setAiAssistantMode } = useSettings();
 const ai = useAi();
 const session = useAiSession();
 const access = useAiAccessMap();
@@ -81,6 +89,7 @@ const selectedModel = ref<string>(defaultModelFor(selectedCli.value));
 const selectedEffort = ref<string>(defaultEffortFor(selectedCli.value));
 const customModelInput = ref<string>('');
 const inputValue = ref('');
+const gearOpen = ref(false);
 
 const LARGE_DOC_THRESHOLD = 200 * 1024;
 const sendFullDocOverride = ref(false);
@@ -112,6 +121,149 @@ const liveSelectionText = computed<string | null>(() => {
 
 const pins = useAiPinnedSelections({ liveSelectionText });
 const images = useAiPendingImages();
+const mentionItems = ref<MentionItem[]>([]);
+const attachedFiles = ref<AttachedRef[]>([]);
+const projectInstructions = ref('');
+
+function sameAiPath(a: string, b: string): boolean {
+  return a.replace(/\\/g, '/') === b.replace(/\\/g, '/');
+}
+
+function joinWorkspaceFile(root: string, name: string): string {
+  const trimmed = root.replace(/[\\/]+$/, '');
+  const sep = root.includes('\\') && !root.includes('/') ? '\\' : '/';
+  return `${trimmed}${sep}${name}`;
+}
+
+async function refreshMentionTree() {
+  const root = (props.workspaceRoot ?? '').trim();
+  if (!root) {
+    mentionItems.value = props.docPath
+      ? [{ path: props.docPath, name: props.docPath.split(/[\\/]/).pop() ?? props.docPath, kind: 'file' }]
+      : [];
+    return;
+  }
+  try {
+    const tree = await workspaceFs.readTree(root);
+    mentionItems.value = flattenMentions(tree);
+  } catch (e) {
+    console.warn('[AiPanel] mention tree failed:', e);
+    mentionItems.value = [];
+  }
+}
+
+async function refreshProjectInstructions() {
+  if (!settings.value.ai.useProjectInstructions) {
+    projectInstructions.value = '';
+    return;
+  }
+  const root = (props.workspaceRoot ?? '').trim();
+  if (!root) {
+    projectInstructions.value = '';
+    return;
+  }
+  try {
+    const { exists, readTextFile } = await import('@tauri-apps/plugin-fs');
+    for (const name of ['MERMARK.md', 'AGENTS.md']) {
+      const path = joinWorkspaceFile(root, name);
+      try {
+        if (!(await exists(path))) continue;
+        const text = await readTextFile(path);
+        projectInstructions.value = clampAiInstructions(text, PROJECT_INSTRUCTIONS_MAX);
+        return;
+      } catch {
+        // Try the next well-known filename.
+      }
+    }
+  } catch (e) {
+    console.warn('[AiPanel] project instructions failed:', e);
+  }
+  projectInstructions.value = '';
+}
+
+watch(
+  () => [props.workspaceRoot, props.docPath, settings.value.ai.useProjectInstructions] as const,
+  async () => {
+    await Promise.all([refreshMentionTree(), refreshProjectInstructions()]);
+  },
+  { immediate: true },
+);
+
+async function attachMention(item: MentionItem) {
+  if (attachedFiles.value.some((f) => sameAiPath(f.path, item.path))) return;
+  const next: AttachedRef = { path: item.path, name: item.name, kind: item.kind };
+  if (item.kind === 'file') {
+    try {
+      const { readTextFile, stat } = await import('@tauri-apps/plugin-fs');
+      const info = await stat(item.path);
+      if (typeof info.size === 'number' && info.size <= ATTACHED_EXCERPT_MAX) {
+        const text = await readTextFile(item.path);
+        next.excerpt = text.length > ATTACHED_EXCERPT_MAX
+          ? text.slice(0, ATTACHED_EXCERPT_MAX)
+          : text;
+      }
+    } catch {
+      // Large or unreadable files stay as a path hint; the model can Read.
+    }
+  }
+  attachedFiles.value = [...attachedFiles.value, next];
+}
+
+function removeAttachment(path: string) {
+  attachedFiles.value = attachedFiles.value.filter((f) => !sameAiPath(f.path, path));
+}
+
+async function onPickMentionFile() {
+  try {
+    const { open } = await import('@tauri-apps/plugin-dialog');
+    const sel = await open({
+      multiple: false,
+      filters: [{ name: 'Markdown', extensions: ['md', 'markdown'] }],
+    });
+    if (typeof sel !== 'string' || !sel) return;
+    const name = sel.split(/[\\/]/).pop() ?? sel;
+    await attachMention({ path: sel, name, kind: 'file' });
+  } catch (e) {
+    console.warn('[AiPanel] mention file picker failed:', e);
+  }
+}
+
+function parentDir(path: string): string {
+  const i = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
+  return i >= 0 ? path.slice(0, i) : path;
+}
+
+/** Drop missing or oversized raster files so the CLI is not handed huge photos. */
+async function keepSendableImagePaths(paths: string[]): Promise<string[]> {
+  let statFn: ((p: string) => Promise<{ size: number }>) | null = null;
+  try {
+    const fs = await import('@tauri-apps/plugin-fs') as { stat?: (p: string) => Promise<{ size: number }> };
+    if (typeof fs.stat === 'function') statFn = fs.stat;
+  } catch {
+    statFn = null;
+  }
+  if (!statFn) return paths;
+  const kept: string[] = [];
+  for (const p of paths) {
+    try {
+      const info = await statFn(p);
+      if (isWithinImageBudget(info.size)) kept.push(p);
+    } catch {
+      // Missing or unreadable files are skipped rather than attached as dead paths.
+    }
+  }
+  return kept;
+}
+
+const docImages = computed(() => {
+  if (!props.docPath) return [];
+  return extractLocalImageRefs(docMarkdown.value, parentDir(props.docPath));
+});
+
+const localNoVision = computed(() => {
+  const cli = selectedCli.value;
+  return (cli === 'ollama' || cli === 'openai') && docImages.value.length > 0;
+});
 
 // ===== Mermaid edit mode bridge =====
 // When a Mermaid node registers an AI edit target, auto-pin its source so the
@@ -291,9 +443,12 @@ watch(() => props.docPath, async (p) => {
 });
 
 function effectiveAccessMap() {
-  // Augment the per-doc access map with read access to the surrounding
-  // workspace, if any. Writes stay scoped to the active doc.
-  return withWorkspaceReadAccess(access.current.value, props.workspaceRoot ?? '');
+  return accessMapForSend(
+    access.current.value,
+    props.workspaceRoot ?? '',
+    settings.value.ai.assistantMode,
+    settings.value.ai.workspaceWrite,
+  );
 }
 
 function preambleOptions(sessionIdToSend: string | null = null): PreambleOptions {
@@ -324,6 +479,15 @@ function preambleOptions(sessionIdToSend: string | null = null): PreambleOptions
     mermaidEditMode: mermaidEditMode.value,
     mermaidWriteFormat: resolveMermaidWriteFormat(settings.value),
     localTools: selectedCli.value === 'ollama' || selectedCli.value === 'openai',
+    docImages: capDocImages(docImages.value, MAX_DOC_IMAGES_PER_TURN).map(r => ({
+      alt: r.alt,
+      absolutePath: r.absolutePath,
+    })),
+    assistantMode: settings.value.ai.assistantMode,
+    customInstructions: settings.value.ai.customInstructions,
+    projectInstructions: projectInstructions.value,
+    workspaceWrite: settings.value.ai.workspaceWrite && settings.value.ai.assistantMode === 'agent',
+    attachedFiles: attachedFiles.value,
   };
 }
 
@@ -353,6 +517,13 @@ async function onSend() {
   // history so user sees thumbnails of what was sent. Don't revoke — chat now
   // owns these URLs.
   const sentImages = images.detachForChat();
+
+  if ((selectedCli.value === 'claude' || selectedCli.value === 'codex') && docImages.value.length > 0) {
+    const extra = capDocImages(docImages.value, MAX_DOC_IMAGES_PER_TURN)
+      .map(r => r.absolutePath)
+      .filter(p => !imagePaths.includes(p));
+    imagePaths = [...imagePaths, ...(await keepSendableImagePaths(extra))];
+  }
 
   if (sentPins.length > 0 || sentImages.length > 0) {
     ai.pushAttachment({ pins: sentPins, images: sentImages });
@@ -413,8 +584,26 @@ async function onSend() {
         docContent: docMarkdown.value,
       });
     },
-    onToolRequest: (tool) => {
+    onToolRequest: async (tool, args) => {
       toolToast.trigger(tool);
+      // Local providers snapshot inside write_file/edit_file. CLI agents write
+      // themselves, so we snapshot a sibling note as soon as the tool is named.
+      const local = selectedCli.value === 'ollama' || selectedCli.value === 'openai';
+      if (local || classifyAiTool(tool) !== 'edit') return;
+      const path = extractToolFilePath(args);
+      if (!path || sameAiPath(path, props.docPath)) return;
+      try {
+        const { readTextFile } = await import('@tauri-apps/plugin-fs');
+        const before = await readTextFile(path);
+        await aiCommands.snapshotCreate(
+          path,
+          before,
+          sessionIdToSend,
+          settings.value.ai.snapshotsKeep,
+        );
+      } catch (e) {
+        console.warn('[AiPanel] sibling snapshot failed:', e);
+      }
     },
   });
 
@@ -477,9 +666,40 @@ async function maybeCompact() {
 
 async function onCancel() { await ai.cancel(); }
 
-async function revertLastSnapshot() {
+function onKeepChange(index: number) {
+  ai.setChangeStatus(index, 'kept');
+}
+
+async function onUndoChange(index: number) {
+  const msg = ai.messages.value[index];
+  const path = extractToolFilePath(msg?.text ?? '') ?? props.docPath;
+  await revertLastSnapshot(path);
+  ai.setChangeStatus(index, 'undone');
+}
+
+async function onShowChangeDiff(index: number) {
+  const msg = ai.messages.value[index];
+  const path = extractToolFilePath(msg?.text ?? '') ?? props.docPath;
+  if (!path) return;
   try {
-    const items = await aiCommands.snapshotList(props.docPath);
+    const items = await aiCommands.snapshotList(path);
+    if (items.length === 0) return;
+    const latest = [...items].sort((a, b) => b.ts.localeCompare(a.ts))[0];
+    const orig = await aiCommands.snapshotRestore(path, latest.id);
+    let current = docMarkdown.value;
+    if (!sameAiPath(path, props.docPath)) {
+      const { readTextFile } = await import('@tauri-apps/plugin-fs');
+      current = await readTextFile(path);
+    }
+    emit('showDiff', orig, current);
+  } catch (e) {
+    console.error('[AiPanel] show change diff failed:', e);
+  }
+}
+
+async function revertLastSnapshot(path: string = props.docPath) {
+  try {
+    const items = await aiCommands.snapshotList(path);
     if (items.length === 0) {
       window.alert('No snapshots to revert to.');
       return;
@@ -488,10 +708,12 @@ async function revertLastSnapshot() {
     const latest = sorted[0];
     const ok = window.confirm(`Revert to snapshot from ${latest.ts}?`);
     if (!ok) return;
-    const content = await aiCommands.snapshotRestore(props.docPath, latest.id);
+    const content = await aiCommands.snapshotRestore(path, latest.id);
     const { writeTextFile } = await import('@tauri-apps/plugin-fs');
-    await writeTextFile(props.docPath, content);
-    emit('applyContent', content);
+    await writeTextFile(path, content);
+    if (sameAiPath(path, props.docPath)) {
+      emit('applyContent', content);
+    }
   } catch (e) {
     console.error('[AiPanel] revert failed:', e);
     window.alert(`Revert failed: ${(e as Error).message}`);
@@ -513,6 +735,7 @@ function newChat() {
   ai.startNewThread();
   session.startNew();
   aiContext.reset(selectedCli.value);
+  attachedFiles.value = [];
 }
 
 async function onSelectThread(id: string) {
@@ -582,32 +805,14 @@ function onPreviewImage(img: PendingImage) {
     :style="layout.dockedStyle.value"
   >
     <AiPanelHeader
-      :cli="selectedCli"
-      :available-clis="availableClis"
-      :model="selectedModel"
-      :model-options="modelOptions"
-      :effort="selectedEffort"
-      :effort-options="effortOptions"
-      :custom-model-input="customModelInput"
-      :is-custom-model="isCustomModel"
-      :cli-connected="cliConnected"
-      :cli-account="health.cache.value[selectedCli]?.account ?? ''"
       :threads="ai.threads.value"
       :active-thread-id="ai.activeThreadId.value"
       :fullscreen="layout.fullscreen.value"
       :title-text="t.aiPanelTitle"
-      :status-ok-label="t.aiStatusOk"
-      :status-auth-label="t.aiStatusAuthRequired"
-      :model-title="t.aiModel"
-      :default-cli-title="t.aiDefaultCli"
       :fullscreen-title="t.aiFullscreen"
       :exit-fullscreen-title="t.aiExitFullscreen"
       :close-title="t.aiClose"
       :new-chat-title="t.aiNewChat"
-      @update:cli="(v) => selectedCli = v"
-      @update:model="(v) => selectedModel = v"
-      @update:effort="(v) => selectedEffort = v"
-      @update:custom-model-input="(v) => customModelInput = v"
       @minimize="layout.minimized.value = true"
       @toggle-fullscreen="layout.fullscreen.value = !layout.fullscreen.value"
       @close="emit('close')"
@@ -660,28 +865,35 @@ function onPreviewImage(img: PendingImage) {
 
     <AiPanelMessages
       :messages="ai.messages.value"
-      :is-sending="ai.isSending.value"
+      :is-sending="ai.isActiveThreadSending.value"
       :is-compacting="ai.isCompacting.value"
       :empty-hint="t.aiEmptyHint"
-      :empty-key-hint="t.aiEmptyKeyHint"
       :cli-connected="cliConnected"
       :auth-required-hint="t.aiStatusAuthRequired"
       :connecting="anyHealthLoading"
+      :send-started-at="ai.sendStartedAt.value"
+      :last-tool-name="ai.lastToolName.value"
+      :is-stalled="ai.isStalled.value"
+      :active-doc-path="props.docPath"
       @link-click="(url) => emit('linkClick', url)"
       @show-attachment="(p) => pins.openAttachment(p)"
+      @keep-change="onKeepChange"
+      @undo-change="onUndoChange"
+      @show-change-diff="onShowChangeDiff"
+      @cancel="onCancel"
+      @report-feedback="emit('reportFeedback')"
     />
 
     <AiPanelComposer
       :input-value="inputValue"
       :cli-connected="cliConnected"
       :model-missing="modelMissing"
-      :is-sending="ai.isSending.value"
+      :is-sending="ai.isActiveThreadSending.value"
+      :is-stalled="ai.isStalled.value"
+      :sending-other-thread="ai.isSending.value && !ai.isActiveThreadSending.value"
       :auth-required-hint="t.aiStatusAuthRequired"
-      :empty-key-hint="t.aiEmptyKeyHint"
       :send-button-text="t.aiSendButton"
       :cancel-button-text="t.aiCancelButton"
-      :access-map-title="t.aiAccessMapTitle"
-      :doc-path="props.docPath"
       :doc-too-large="docTooLarge"
       :doc-markdown-length-kb="Math.round(docMarkdown.length / 1024)"
       :send-full-doc-override="sendFullDocOverride"
@@ -691,11 +903,12 @@ function onPreviewImage(img: PendingImage) {
       :live-selection-text="liveSelectionText"
       :pin-preview="pins.previewOf"
       :pending-images="images.pendingImages.value"
-      :access-map="access.current.value"
+      :local-no-vision="localNoVision"
+      :mention-items="mentionItems"
+      :attached-files="attachedFiles"
       @update:input-value="(v) => inputValue = v"
       @update:send-full-doc-override="(v) => sendFullDocOverride = v"
       @update:include-pinned="(v) => pins.includePinned.value = v"
-      @update:access-map="(v) => access.save(v)"
       @send="onSend"
       @cancel="onCancel"
       @paste="(e) => images.onComposerPaste(e)"
@@ -706,7 +919,51 @@ function onPreviewImage(img: PendingImage) {
       @preview-image="onPreviewImage"
       @remove-image="(id) => images.removePendingImage(id)"
       @clear-images="images.clearPendingImages"
+      @open-settings="gearOpen = true"
+      @attach-mention="attachMention"
+      @remove-attachment="removeAttachment"
+      @pick-mention-file="onPickMentionFile"
+    >
+      <template #model>
+        <AiPanelModelPicker
+          :cli="selectedCli"
+          :available-clis="availableClis"
+          :model="selectedModel"
+          :model-options="modelOptions"
+          :effort="selectedEffort"
+          :effort-options="effortOptions"
+          :custom-model-input="customModelInput"
+          :is-custom-model="isCustomModel"
+          :cli-connected="cliConnected"
+          :cli-account="health.cache.value[selectedCli]?.account ?? ''"
+          :status-ok-label="t.aiStatusOk"
+          :status-auth-label="t.aiStatusAuthRequired"
+          :model-title="t.aiModel"
+          :default-cli-title="t.aiDefaultCli"
+          @update:cli="(v) => selectedCli = v"
+          @update:model="(v) => selectedModel = v"
+          @update:effort="(v) => selectedEffort = v"
+          @update:custom-model-input="(v) => customModelInput = v"
+        />
+      </template>
+      <template #mode>
+        <AiPanelModeChips
+          :mode="settings.ai.assistantMode"
+          @update:mode="setAiAssistantMode"
+        />
+      </template>
+    </AiPanelComposer>
+
+    <AiPanelGearSheet
+      :open="gearOpen"
+      :access-map-title="t.aiAccessMapTitle"
+      :doc-path="props.docPath"
+      :access-map="access.current.value"
+      :workspace-root="props.workspaceRoot"
+      @close="gearOpen = false"
+      @update:access-map="(v) => access.save(v)"
       @snapshot-restored="onSnapshotRestored"
+      @report-feedback="emit('reportFeedback')"
     />
 
     <AiToolToast :tool="toolToast.toolActivity.value" />
@@ -734,6 +991,7 @@ function onPreviewImage(img: PendingImage) {
   flex-direction: column;
   min-width: 0;
   min-height: 0;
+  position: relative;
 }
 /* Docked: an ordinary flex sibling of the editor area, sized by dockedStyle.
    `order` puts it on the configured side without re-mounting the component,

@@ -6,10 +6,11 @@
 //!   --output-format       : confirmed, choices: text | json | stream-json
 //!   --append-system-prompt: confirmed
 //!   --allowedTools        : confirmed (also accepts --allowed-tools)
+//!   --disallowedTools     : confirmed (also accepts --disallowed-tools).
+//!     `--allowedTools` is an auto-approve list, not a sandbox: tools left
+//!     off it can still run in `-p` unless they are also denied here.
 //!   --permission-mode     : confirmed, choices include bypassPermissions | default
 //!   -r / --resume         : confirmed (flag, not positional subcommand)
-//!
-//! No deviations from the plan.
 
 use std::process::Stdio;
 use base64::Engine;
@@ -49,7 +50,13 @@ pub async fn spawn(req: &AiSendRequest) -> Result<Child, String> {
     }
     let allowed = allowed_tools(&req.access_map.tools);
     if !allowed.is_empty() {
-        cmd.arg("--allowedTools").arg(allowed);
+        cmd.arg("--allowedTools").arg(&allowed);
+    }
+    // `--allowedTools` alone does not block Bash/WebSearch/Write. Headless
+    // `-p` cannot prompt, so anything not denied here may still execute.
+    let denied = disallowed_tools(&req.access_map.tools);
+    if !denied.is_empty() {
+        cmd.arg("--disallowedTools").arg(&denied);
     }
     cmd.arg("--permission-mode").arg(if req.bypass { "bypassPermissions" } else { "default" });
     let workdir_for_claude = if req.work_dir.is_empty() {
@@ -148,6 +155,26 @@ fn allowed_tools(tools: &AccessMapTools) -> String {
     allowed.join(",")
 }
 
+/// Complementary deny list. Claude Code's `--allowedTools` is not exclusive;
+/// without this, a map with bash/network/write off can still run those tools.
+fn disallowed_tools(tools: &AccessMapTools) -> String {
+    let mut denied: Vec<&str> = Vec::new();
+    if !tools.bash {
+        denied.push("Bash");
+        denied.push("Shell");
+    }
+    if !tools.file_write {
+        denied.push("Write");
+        denied.push("Edit");
+        denied.push("NotebookEdit");
+    }
+    if !tools.network {
+        denied.push("WebFetch");
+        denied.push("WebSearch");
+    }
+    denied.join(",")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -186,6 +213,33 @@ mod tests {
         // Explicitly disable file_read + file_write to test bash-only case.
         let t = AccessMapTools { bash: true, network: false, file_read: false, file_write: false };
         assert_eq!(allowed_tools(&t), "Bash");
+    }
+
+    #[test]
+    fn disallowed_tools_default_denies_bash_shell_and_network() {
+        let s = disallowed_tools(&AccessMapTools::default());
+        assert!(s.contains("Bash"), "got: {}", s);
+        assert!(s.contains("Shell"), "got: {}", s);
+        assert!(s.contains("WebFetch"), "got: {}", s);
+        assert!(s.contains("WebSearch"), "got: {}", s);
+        assert!(!s.contains("Write"), "got: {}", s);
+        assert!(!s.contains("Edit"), "got: {}", s);
+    }
+
+    #[test]
+    fn disallowed_tools_write_off_denies_write_edit() {
+        let t = AccessMapTools { file_read: true, file_write: false, bash: false, network: false };
+        let s = disallowed_tools(&t);
+        assert!(s.contains("Write"), "got: {}", s);
+        assert!(s.contains("Edit"), "got: {}", s);
+        assert!(s.contains("NotebookEdit"), "got: {}", s);
+        assert!(s.contains("Bash"), "got: {}", s);
+    }
+
+    #[test]
+    fn disallowed_tools_all_on_is_empty() {
+        let t = AccessMapTools { bash: true, network: true, file_read: true, file_write: true };
+        assert_eq!(disallowed_tools(&t), "");
     }
 
     fn req_with(preamble: &str, turn_context: &str, prompt: &str) -> AiSendRequest {

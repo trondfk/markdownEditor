@@ -289,7 +289,7 @@ async fn run_tool_loop(
                     request_id: call.id.clone(),
                 },
             );
-            let result = match file_tools::run_tool(&req, &call.name, &call.args).await {
+            let result = match file_tools::run_tool(&req, &call.name, &call.args, Some(&app)).await {
                 Ok(ok) => ok,
                 Err(err) => {
                     let _ = app.emit_to(

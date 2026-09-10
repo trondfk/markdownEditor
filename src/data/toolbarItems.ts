@@ -41,6 +41,7 @@ export const TOOLBAR_ITEMS: ToolbarItemDef[] = [
   { id: 'present-marp', category: 'file-ops', defaultZone: 'toolbar', defaultOrder: 52, needsEditor: false, labelKey: 'presentMarp' },
   { id: 'show-shortcuts', category: 'file-ops', defaultZone: 'toolbar', defaultOrder: 60, needsEditor: false, labelKey: 'keyboardShortcuts' },
   { id: 'show-settings', category: 'file-ops', defaultZone: 'toolbar', defaultOrder: 70, needsEditor: false, labelKey: 'settings' },
+  { id: 'report-feedback', category: 'file-ops', defaultZone: 'toolbar', defaultOrder: 75, needsEditor: false, labelKey: 'reportFeedback' },
 
   // Edit history
   { id: 'undo', category: 'edit-history', defaultZone: 'toolbar', defaultOrder: 100, needsEditor: true, labelKey: 'undo' },

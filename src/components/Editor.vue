@@ -75,6 +75,7 @@ import { useFootnotes } from "../composables/useFootnotes";
 import { useLineNumbers } from "../composables/useLineNumbers";
 import { resolveEditorImages, getDirectoryFromFilePath } from "../utils/image-resolver";
 import { importImageBytes } from "../services/imageImport";
+import { clipboardHtmlToEditorHtml, isInternalEditorHtml } from "../utils/clipboard-html";
 import TableContextMenu from "./TableContextMenu.vue";
 import ImagePreview from "./ImagePreview.vue";
 import EditorGutter from "./EditorGutter.vue";
@@ -99,6 +100,7 @@ import { FootnoteRef, FootnoteSection } from "../extensions/FootnoteExtension";
 import { DocumentSearchExtension } from "../extensions/DocumentSearchExtension";
 import { MoveBlockExtension } from "../extensions/MoveBlockExtension";
 import { SafeHtmlBlockExtension } from "../extensions/SafeHtmlBlockExtension";
+import { UserKeybindGate } from "../extensions/UserKeybindGate";
 import type { VisualSearchMatch, VisualTextMap } from "../composables/useDocumentSearch";
 import { useI18n } from "../i18n";
 
@@ -528,6 +530,7 @@ const editor = useEditor({
     FootnoteSection,
     DocumentSearchExtension,
     MoveBlockExtension,
+    UserKeybindGate,
     SafeHtmlBlockExtension,
     CharacterCount.configure({
       limit: null,
@@ -595,6 +598,18 @@ const editor = useEditor({
         }
       }
 
+      // External HTML (browser/Word) is a different dialect than the HTML we
+      // write on save. Inserting it raw looks fine until reload, when
+      // htmlToMarkdown has already dropped the user's later edits. Convert
+      // through markdown first so the document they edit is the one on disk.
+      if (html && !isInternalEditorHtml(html) && editor.value) {
+        const editorHtml = clipboardHtmlToEditorHtml(html);
+        if (editorHtml) {
+          editor.value.chain().focus().insertContent(editorHtml).run();
+          return true;
+        }
+      }
+
       // Try plain text table (tab-separated or pipe-separated)
       const text = clipboardData.getData("text/plain");
       if (text) {
@@ -641,7 +656,12 @@ watch(
       }
       setTimeout(() => {
         settingContentCount = Math.max(0, settingContentCount - 1);
-        emit("update:hasChanges", false);
+        // User keystrokes during the setContent window still emit HTML, but
+        // onUpdate skips hasChanges while the counter is up. Re-check against
+        // the loaded snapshot so a paste+edit is not marked clean.
+        if (editor.value) {
+          emit("update:hasChanges", editor.value.getHTML() !== lastSavedHtml);
+        }
       }, 200);
     }
   }

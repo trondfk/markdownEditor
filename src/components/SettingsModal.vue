@@ -7,7 +7,7 @@ import { BUILTIN_MERMAID_FORMATS, CUSTOM_FORMAT_ID, type MermaidFormat } from '.
 import { useSystemFonts } from '../composables/useSystemFonts';
 import { useLayoutConfig, type LayoutZone } from '../composables/useLayoutConfig';
 import { getItemDef } from '../data/toolbarItems';
-import AiSettingsTab from './ai/AiSettingsTab.vue';
+import KeybindsSettingsTab from './KeybindsSettingsTab.vue';
 import { useAutoUpdate } from '../composables/useAutoUpdate';
 
 const { t, locale, setLocale, availableLocales, localeLabels } = useI18n();
@@ -49,7 +49,7 @@ const editorSystemFonts = computed(() =>
 );
 const codeSystemFonts = computed(() => monoFonts.value);
 
-type SettingsTab = 'appearance' | 'editor' | 'code' | 'general' | 'layout' | 'ai' | 'updates';
+type SettingsTab = 'appearance' | 'editor' | 'code' | 'general' | 'layout' | 'shortcuts' | 'ai' | 'updates';
 const activeTab = ref<SettingsTab>('editor');
 
 const mermaidFormatOptions = computed<MermaidFormat[]>(() => {
@@ -425,7 +425,7 @@ onUnmounted(() => {
         <!-- Tab Navigation -->
         <div class="settings-tabs">
           <button
-            v-for="tab in (['appearance', 'editor', 'code', 'general', 'layout', 'ai', 'updates'] as SettingsTab[])"
+            v-for="tab in (['appearance', 'editor', 'code', 'general', 'layout', 'shortcuts', 'ai', 'updates'] as SettingsTab[])"
             :key="tab"
             class="settings-tab"
             :class="{ active: activeTab === tab }"
@@ -468,12 +468,20 @@ onUnmounted(() => {
             <svg v-else-if="tab === 'ai'" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/>
             </svg>
+            <svg v-else-if="tab === 'shortcuts'" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="2" y="6" width="20" height="12" rx="2"/>
+              <line x1="6" y1="10" x2="6" y2="10"/>
+              <line x1="10" y1="10" x2="10" y2="10"/>
+              <line x1="14" y1="10" x2="14" y2="10"/>
+              <line x1="18" y1="10" x2="18" y2="10"/>
+              <line x1="8" y1="14" x2="16" y2="14"/>
+            </svg>
             <!-- Updates icon -->
             <svg v-else width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/>
               <polyline points="17 6 23 6 23 12"/>
             </svg>
-            {{ tab === 'appearance' ? t.appearance : tab === 'editor' ? t.editor : tab === 'code' ? t.code : tab === 'general' ? t.general : tab === 'layout' ? t.layout : tab === 'ai' ? t.aiTabLabel : t.updatesTab }}
+            {{ tab === 'appearance' ? t.appearance : tab === 'editor' ? t.editor : tab === 'code' ? t.code : tab === 'general' ? t.general : tab === 'layout' ? t.layout : tab === 'shortcuts' ? t.shortcutsTab : tab === 'ai' ? t.aiTabLabel : t.updatesTab }}
           </button>
         </div>
 
@@ -1024,6 +1032,11 @@ onUnmounted(() => {
               </div>
             </div>
 
+          </div>
+
+          <!-- Shortcuts Tab -->
+          <div v-if="activeTab === 'shortcuts'" class="settings-section">
+            <KeybindsSettingsTab />
           </div>
 
           <!-- Layout Tab -->

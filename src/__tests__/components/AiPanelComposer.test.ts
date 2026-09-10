@@ -15,11 +15,8 @@ function baseProps() {
     cliConnected: true,
     isSending: false,
     authRequiredHint: 'Auth required',
-    emptyKeyHint: 'Ctrl+Enter to send.',
     sendButtonText: 'Send',
     cancelButtonText: 'Cancel',
-    accessMapTitle: 'Access map',
-    docPath: '/x/doc.md',
     docTooLarge: false,
     docMarkdownLengthKb: 1,
     sendFullDocOverride: false,
@@ -29,7 +26,6 @@ function baseProps() {
     liveSelectionText: null as string | null,
     pinPreview: (s: string) => s,
     pendingImages: [],
-    accessMap: null,
   };
 }
 
@@ -53,5 +49,19 @@ describe('AiPanelComposer model guard', () => {
   it('still disables send for empty input even without the guard', () => {
     const w = mount(AiPanelComposer, { props: { ...baseProps(), inputValue: '' } });
     expect(sendButton(w).attributes('disabled')).toBeDefined();
+  });
+
+  it('emits openSettings from the gear button', async () => {
+    const w = mount(AiPanelComposer, { props: baseProps() });
+    const buttons = w.findAll('button');
+    const gear = buttons.find(b => b.attributes('title') === 'AI settings') ?? buttons[1];
+    await gear!.trigger('click');
+    expect(w.emitted('openSettings')).toBeTruthy();
+  });
+
+  it('does not print the Ctrl+Enter shortcut in the action bar', () => {
+    const w = mount(AiPanelComposer, { props: baseProps() });
+    expect(w.text()).not.toContain('Ctrl+Enter');
+    expect(sendButton(w).attributes('title')).toContain('Ctrl+Enter');
   });
 });

@@ -63,4 +63,34 @@ describe('AiPanelPinList', () => {
     await w.find('.ai-panel__pinned-action').trigger('click');
     expect(w.emitted('pin')).toBeTruthy();
   });
+
+  it('keeps a short live selection on one line without Show more', () => {
+    const w = mount(AiPanelPinList, {
+      props: { ...baseProps(), pins: [], showLive: true, liveText: 'a short bit' },
+    });
+    expect(w.find('.ai-panel__pin-more').exists()).toBe(false);
+    expect(w.find('.ai-panel__pin-live-text--open').exists()).toBe(false);
+  });
+
+  it('offers Show more for a long live selection and expands on click', async () => {
+    const liveText = 'word '.repeat(40).trim();
+    const w = mount(AiPanelPinList, {
+      props: { ...baseProps(), pins: [], showLive: true, liveText },
+    });
+    const more = w.find('.ai-panel__pin-more');
+    expect(more.exists()).toBe(true);
+    expect(more.text()).toContain('Show more');
+    await more.trigger('click');
+    expect(w.find('.ai-panel__pin-live--open').exists()).toBe(true);
+    expect(w.find('.ai-panel__pin-live-text--open').exists()).toBe(true);
+    expect(w.find('.ai-panel__pin-more').text()).toContain('Show less');
+    expect(w.find('.ai-panel__pin-live-text').text()).toBe(liveText);
+  });
+
+  it('offers Show more when the live selection has several lines', () => {
+    const w = mount(AiPanelPinList, {
+      props: { ...baseProps(), pins: [], showLive: true, liveText: 'line one\nline two' },
+    });
+    expect(w.find('.ai-panel__pin-more').exists()).toBe(true);
+  });
 });

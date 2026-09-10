@@ -1,30 +1,63 @@
 <script setup lang="ts">
-import { ref, watch, nextTick } from 'vue';
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import AiMessage from './AiMessage.vue';
+import AiActivityGroup from './AiActivityGroup.vue';
+import AiChangeCard from './AiChangeCard.vue';
 import { useI18n } from '../../i18n';
 import { parseAiOutput } from '../../composables/useAiOutputParser';
 import type { AiMessage as AiMessageType, AttachedPin } from '../../composables/useAi';
+import { groupAiMessages } from '../../utils/ai-message-groups';
+import { formatElapsed } from '../../utils/format-elapsed';
+import { extractToolFilePath } from '../../utils/ai-tool-kind';
 
 const { t } = useI18n();
 
 const props = defineProps<{
   messages: AiMessageType[];
   isSending: boolean;
-  /** Sending, but for the summarization round rather than the user's turn. */
   isCompacting: boolean;
   emptyHint: string;
-  emptyKeyHint: string;
   cliConnected: boolean;
   authRequiredHint: string;
   connecting: boolean;
+  sendStartedAt: number | null;
+  lastToolName: string | null;
+  isStalled: boolean;
+  activeDocPath: string;
 }>();
 
-defineEmits<{
+const emit = defineEmits<{
   linkClick: [url: string];
   showAttachment: [pins: AttachedPin[]];
+  keepChange: [index: number];
+  undoChange: [index: number];
+  showChangeDiff: [index: number];
+  cancel: [];
+  reportFeedback: [];
 }>();
 
 const messagesEl = ref<HTMLElement | null>(null);
+const now = ref(Date.now());
+let tick: ReturnType<typeof setInterval> | undefined;
+
+onMounted(() => {
+  tick = setInterval(() => { now.value = Date.now(); }, 1000);
+});
+onUnmounted(() => {
+  if (tick) clearInterval(tick);
+});
+
+const groups = computed(() => groupAiMessages(props.messages));
+
+const workingLabel = computed(() => {
+  if (props.isCompacting) return t.value.aiCompacting;
+  if (props.isStalled) return t.value.aiWorkingStalled;
+  if (props.sendStartedAt) {
+    const elapsed = formatElapsed(now.value - props.sendStartedAt);
+    return t.value.aiWorkingElapsed(elapsed, props.lastToolName ?? '');
+  }
+  return t.value.aiWorkingPlease;
+});
 
 watch(() => props.messages.length, async () => {
   await nextTick();
@@ -34,28 +67,65 @@ watch(() => props.messages.length, async () => {
 function messageHasFence(text: string): boolean {
   return parseAiOutput(text).kind !== 'plain';
 }
+
+function isActiveDoc(argsText: string): boolean {
+  if (!props.activeDocPath) return false;
+  const p = extractToolFilePath(argsText) ?? '';
+  return p.replace(/\\/g, '/') === props.activeDocPath.replace(/\\/g, '/');
+}
+
+const lastAssistantError = computed(() => {
+  for (let i = props.messages.length - 1; i >= 0; i--) {
+    const m = props.messages[i];
+    if (m.role === 'assistant' && m.error) return true;
+    if (m.role === 'assistant' || m.role === 'user') break;
+  }
+  return false;
+});
 </script>
 
 <template>
   <div ref="messagesEl" class="ai-panel__messages">
-    <div v-if="messages.length === 0 && !connecting" class="ai-panel__empty">
+    <div v-if="messages.length === 0 && !connecting && !isSending" class="ai-panel__empty">
       <p>{{ cliConnected ? emptyHint : authRequiredHint }}</p>
-      <p class="ai-panel__empty-hint">{{ emptyKeyHint }}</p>
     </div>
-    <AiMessage
-      v-for="(m, i) in messages"
-      :key="i"
-      :message="m"
-      :has-fence="m.role === 'assistant' && m.done && messageHasFence(m.text)"
-      @link-click="(url: string) => $emit('linkClick', url)"
-      @show-attachment="(pins) => $emit('showAttachment', pins)"
-    />
-    <div v-if="isSending" class="ai-panel__processing">
+    <template v-for="(g, gi) in groups" :key="gi">
+      <AiActivityGroup v-if="g.type === 'activity'" :messages="g.messages" />
+      <AiChangeCard
+        v-else-if="g.type === 'change'"
+        :message="g.message"
+        :index="g.index"
+        :is-active-doc="isActiveDoc(g.message.text)"
+        @keep="(i) => emit('keepChange', i)"
+        @undo="(i) => emit('undoChange', i)"
+        @show-diff="(i) => emit('showChangeDiff', i)"
+      />
+      <AiMessage
+        v-else
+        :message="g.message"
+        :has-fence="g.message.role === 'assistant' && g.message.done && messageHasFence(g.message.text)"
+        @link-click="(url: string) => emit('linkClick', url)"
+        @show-attachment="(pins) => emit('showAttachment', pins)"
+      />
+    </template>
+    <div v-if="isSending" class="ai-panel__processing" :class="{ 'ai-panel__processing--stalled': isStalled }">
       <span class="ai-msg__thinking-dot" />
       <span class="ai-msg__thinking-dot" />
       <span class="ai-msg__thinking-dot" />
-      <span>{{ isCompacting ? t.aiCompacting : t.aiWorkingPlease }}</span>
+      <span>{{ workingLabel }}</span>
+      <button
+        v-if="isStalled"
+        type="button"
+        class="ai-panel__processing-cancel"
+        @click="emit('cancel')"
+      >{{ t.aiCancelButton }}</button>
     </div>
+    <button
+      v-if="lastAssistantError && !isSending"
+      type="button"
+      class="ai-panel__report-error"
+      @click="emit('reportFeedback')"
+    >{{ t.reportFeedback }}</button>
   </div>
 </template>
 
@@ -73,11 +143,6 @@ function messageHasFence(text: string): boolean {
   text-align: center;
   color: var(--text-muted);
 }
-.ai-panel__empty-hint {
-  font-size: 12px;
-  color: var(--text-muted);
-  margin-top: 6px;
-}
 .ai-panel__processing {
   display: inline-flex;
   align-items: center;
@@ -89,6 +154,26 @@ function messageHasFence(text: string): boolean {
   font-size: 11px;
   color: var(--text-muted);
   font-style: italic;
+}
+.ai-panel__processing--stalled {
+  color: #b45309;
+}
+.ai-panel__processing-cancel,
+.ai-panel__report-error {
+  margin-left: 6px;
+  border: 1px solid #b45309;
+  background: #b45309;
+  color: #fff;
+  border-radius: 6px;
+  padding: 2px 8px;
+  font-size: 11px;
+  cursor: pointer;
+}
+.ai-panel__report-error {
+  align-self: flex-start;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  border-color: var(--border-primary);
 }
 .ai-panel__processing > span:first-child,
 .ai-panel__processing > span:nth-child(2),
