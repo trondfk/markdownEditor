@@ -18,7 +18,13 @@
 //! 5. CONCERN: `codex exec resume` does NOT support `--sandbox` or `--cd`.
 //!    When resuming, sandbox mode and working dir cannot be overridden via CLI
 //!    flags. Codex uses the persisted session config for resumed sessions.
-//!    This is acceptable behaviour but should be documented for B2 follow-up.
+//!    A new session after a map change is therefore the only way to apply a
+//!    tighter sandbox.
+//!
+//! 6. `--add-dir` used to be the frontend workspace root whenever a project
+//!    was open. That made `workspace-write` apply to every note, ignoring the
+//!    access-map write list. `--cd` now follows the writable note (unless bash
+//!    is on), and `--add-dir` only extra directory write-paths.
 
 use std::process::Stdio;
 use tokio::io::AsyncWriteExt;
@@ -77,18 +83,10 @@ pub async fn spawn(req: &AiSendRequest) -> Result<Child, String> {
         // workDir blank because they don't bind to a particular file — fall
         // back to the user's home directory in that case so the flag still
         // has a real path to point at, and skip --add-dir entirely.
-        let workdir_for_codex = if req.work_dir.is_empty() {
-            std::env::var("HOME")
-                .or_else(|_| std::env::var("USERPROFILE"))
-                .unwrap_or_else(|_| ".".to_string())
-        } else {
-            req.work_dir.clone()
-        };
-        cmd.arg("--cd").arg(&workdir_for_codex);
-        if !req.work_dir.is_empty() {
-            // Only mark explicit work dirs as writable; skipping --add-dir for
-            // the home-fallback case keeps the sandbox tighter.
-            cmd.arg("--add-dir").arg(&req.work_dir);
+        let cd = spawn_cd(req);
+        cmd.arg("--cd").arg(&cd);
+        for dir in spawn_add_dirs(req) {
+            cmd.arg("--add-dir").arg(dir);
         }
         if let Some(model) = &req.model {
             cmd.arg("--model").arg(model);
@@ -218,8 +216,73 @@ fn context_window_from_cache(raw: &str, slug: &str) -> Option<u64> {
 fn sandbox_mode(tools: &AccessMapTools, bypass: bool) -> &'static str {
     if bypass && tools.bash { "danger-full-access" }
     else if tools.file_write { "workspace-write" }
-    else if tools.file_read { "read-only" }
     else { "read-only" }
+}
+
+fn path_parent(path: &str) -> String {
+    let trimmed = path.trim_end_matches(['/', '\\']);
+    match trimmed.rfind(['/', '\\']) {
+        Some(0) => trimmed[..1].to_string(),
+        Some(i) => trimmed[..i].to_string(),
+        None => path.to_string(),
+    }
+}
+
+fn looks_like_markdown_file(path: &str) -> bool {
+    let name = match path.rsplit(['/', '\\']).next() {
+        Some(n) if !n.is_empty() => n,
+        _ => path,
+    };
+    let lower = name.to_ascii_lowercase();
+    lower.ends_with(".md") || lower.ends_with(".markdown")
+}
+
+fn fallback_cd() -> String {
+    std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .unwrap_or_else(|_| ".".to_string())
+}
+
+/// `--cd` is Codex's writable workspace under `workspace-write`. Using the
+/// MerMark workspace root here (the frontend `workDir`) used to make every
+/// note in the project writable. When bash is off we sit next to the
+/// writable markdown file instead. Enabling bash keeps the project root so
+/// shell commands have a sensible cwd (and then the whole tree is writable).
+fn spawn_cd(req: &AiSendRequest) -> String {
+    if req.access_map.tools.bash && !req.work_dir.is_empty() {
+        return req.work_dir.clone();
+    }
+    if req.access_map.tools.file_write {
+        if let Some(wp) = req.access_map.write_paths.iter().find(|p| !p.is_empty()) {
+            if looks_like_markdown_file(wp) {
+                return path_parent(wp);
+            }
+            return wp.clone();
+        }
+    }
+    if !req.work_dir.is_empty() {
+        return req.work_dir.clone();
+    }
+    fallback_cd()
+}
+
+/// Extra writable roots for `--add-dir`. Only directory write-paths (the
+/// opt-in workspace-write root). Never the frontend workDir by itself.
+fn spawn_add_dirs(req: &AiSendRequest) -> Vec<String> {
+    if !req.access_map.tools.file_write {
+        return Vec::new();
+    }
+    let cd = spawn_cd(req);
+    let mut out = Vec::new();
+    for wp in &req.access_map.write_paths {
+        if wp.is_empty() || looks_like_markdown_file(wp) || wp == &cd {
+            continue;
+        }
+        if !out.contains(wp) {
+            out.push(wp.clone());
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -250,6 +313,67 @@ mod tests {
     fn sandbox_mode_bypass_with_bash_is_danger_full_access() {
         let t = AccessMapTools { bash: true, ..AccessMapTools::default() };
         assert_eq!(sandbox_mode(&t, true), "danger-full-access");
+    }
+
+    fn req_with(work_dir: &str, write_paths: &[&str], bash: bool, file_write: bool) -> AiSendRequest {
+        AiSendRequest {
+            cli: crate::ai::types::CliKind::Codex,
+            session_id: None,
+            model: None,
+            effort: None,
+            prompt: "hi".into(),
+            preamble: String::new(),
+            turn_context: String::new(),
+            access_map: crate::ai::types::AccessMap {
+                read_paths: write_paths.iter().map(|s| s.to_string()).collect(),
+                write_paths: write_paths.iter().map(|s| s.to_string()).collect(),
+                tools: AccessMapTools {
+                    bash,
+                    network: false,
+                    file_read: true,
+                    file_write,
+                },
+            },
+            bypass: false,
+            work_dir: work_dir.into(),
+            images: vec![],
+            cli_path: None,
+            history: vec![],
+            num_ctx: None,
+            doc_content: None,
+        }
+    }
+
+    #[test]
+    fn spawn_cd_without_bash_uses_the_note_folder_not_the_workspace() {
+        let req = req_with("/notes", &["/notes/folder/doc.md"], false, true);
+        assert_eq!(spawn_cd(&req), "/notes/folder");
+        assert!(spawn_add_dirs(&req).is_empty());
+    }
+
+    #[test]
+    fn spawn_add_dirs_includes_opt_in_workspace_root() {
+        let req = req_with("/notes", &["/notes/folder/doc.md", "/notes"], false, true);
+        assert_eq!(spawn_cd(&req), "/notes/folder");
+        assert_eq!(spawn_add_dirs(&req), vec!["/notes".to_string()]);
+    }
+
+    #[test]
+    fn spawn_cd_with_bash_keeps_the_project_root() {
+        let req = req_with("/notes", &["/notes/folder/doc.md"], true, true);
+        assert_eq!(spawn_cd(&req), "/notes");
+    }
+
+    #[test]
+    fn spawn_add_dirs_empty_when_write_is_off() {
+        let req = req_with("/notes", &["/notes/doc.md"], false, false);
+        assert!(spawn_add_dirs(&req).is_empty());
+        assert_eq!(spawn_cd(&req), "/notes");
+    }
+
+    #[test]
+    fn path_parent_handles_windows_separators() {
+        assert_eq!(path_parent(r"D:\notes\folder\doc.md"), r"D:\notes\folder");
     }
 
     const CACHE_FIXTURE: &str = r#"{"models":[

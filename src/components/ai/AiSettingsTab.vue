@@ -3,7 +3,7 @@ import { computed, onMounted, ref } from 'vue';
 import { open as openExternal } from '@tauri-apps/plugin-shell';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { useI18n } from '../../i18n';
-import { useSettings, OLLAMA_MIN_NUM_CTX, type CliKind, type PanelSide } from '../../composables/useSettings';
+import { useSettings, OLLAMA_MIN_NUM_CTX, CUSTOM_INSTRUCTIONS_MAX, type CliKind, type PanelSide } from '../../composables/useSettings';
 import { useAi } from '../../composables/useAi';
 import { useAiHealth } from '../../composables/useAiHealth';
 import { useAiAudit } from '../../composables/useAiAudit';
@@ -29,6 +29,9 @@ const {
   setAiHasSeenFirstRun,
   setAiCliPathClaude,
   setAiCliPathCodex,
+  setAiCustomInstructions,
+  setAiUseProjectInstructions,
+  setAiWorkspaceWrite,
 } = useSettings();
 const { check, cache, loading } = useAiHealth();
 const { ollamaModels, refreshOllamaModels, openaiModels, refreshOpenaiModels, refreshCodexModels } = useAiModels();
@@ -546,6 +549,37 @@ async function copyAudit() {
     </section>
 
     <section class="ai-settings-section">
+      <h4>{{ t.aiCustomInstructions }}</h4>
+      <textarea
+        class="ai-instructions"
+        rows="5"
+        :maxlength="CUSTOM_INSTRUCTIONS_MAX"
+        :value="settings.ai.customInstructions"
+        @change="setAiCustomInstructions(($event.target as HTMLTextAreaElement).value)"
+      />
+      <small class="ai-helper">{{ t.aiCustomInstructionsHint }}</small>
+      <label class="ai-toggle-label">
+        <input
+          type="checkbox"
+          :checked="settings.ai.useProjectInstructions"
+          @change="setAiUseProjectInstructions(($event.target as HTMLInputElement).checked)"
+        />
+        <span>{{ t.aiProjectInstructions }}</span>
+      </label>
+      <label class="ai-toggle-label">
+        <input
+          type="checkbox"
+          :checked="settings.ai.workspaceWrite"
+          @change="setAiWorkspaceWrite(($event.target as HTMLInputElement).checked)"
+        />
+        <span>
+          <strong>{{ t.aiWorkspaceWrite }}</strong>
+          <small class="ai-helper ai-helper--toggle">{{ t.aiWorkspaceWriteHint }}</small>
+        </span>
+      </label>
+    </section>
+
+    <section class="ai-settings-section">
       <label class="ai-inline-label">
         {{ t.aiSnapshotsKeep }}
         <input
@@ -690,6 +724,18 @@ async function copyAudit() {
   cursor: not-allowed;
 }
 
+.ai-instructions {
+  width: 100%;
+  box-sizing: border-box;
+  font: inherit;
+  font-size: 13px;
+  background: var(--bg-input, var(--bg-secondary));
+  color: var(--text-primary);
+  border: 1px solid var(--border-primary);
+  border-radius: 6px;
+  padding: 8px;
+  margin-bottom: 8px;
+}
 .ai-helper {
   display: block;
   font-size: 11px;

@@ -234,6 +234,76 @@ export function useToolbarActions() {
     runCommand((e) => (e.chain() as any).focus().insertFootnote().run());
   };
 
+  function runWritingAction(id: string): boolean {
+    switch (id) {
+      case 'bold':
+        runCommand(e => e.chain().focus().toggleBold().run());
+        return true;
+      case 'italic':
+        runCommand(e => e.chain().focus().toggleItalic().run());
+        return true;
+      case 'strikethrough':
+        runCommand(e => e.chain().focus().toggleStrike().run());
+        return true;
+      case 'inline-code':
+        runCommand(e => e.chain().focus().toggleCode().run());
+        return true;
+      case 'highlight':
+        runCommand(e => e.chain().focus().toggleHighlight().run());
+        return true;
+      case 'bullet-list':
+        runCommand(e => e.chain().focus().toggleBulletList().run());
+        return true;
+      case 'ordered-list':
+        runCommand(e => e.chain().focus().toggleOrderedList().run());
+        return true;
+      case 'task-list':
+        runCommand(e => e.chain().focus().toggleTaskList().run());
+        return true;
+      case 'blockquote':
+        runCommand(e => e.chain().focus().toggleBlockquote().run());
+        return true;
+      case 'code-block':
+        runCommand(e => e.chain().focus().toggleCodeBlock().run());
+        return true;
+      case 'horizontal-rule':
+        runCommand(e => e.chain().focus().setHorizontalRule().run());
+        return true;
+      case 'page-break':
+        runCommand(e => (e.chain().focus() as any).insertPageBreak().run());
+        return true;
+      case 'math-inline':
+        insertMath(false);
+        return true;
+      case 'math-block':
+        insertMath(true);
+        return true;
+      case 'link':
+        setLink();
+        return true;
+      case 'image':
+        void insertImageFromFile();
+        return true;
+      case 'table':
+        insertTable();
+        return true;
+      case 'mermaid':
+        insertMermaid();
+        return true;
+      case 'footnote':
+        insertFootnote();
+        return true;
+      case 'undo':
+        runCommand(e => e.chain().focus().undo().run());
+        return true;
+      case 'redo':
+        runCommand(e => e.chain().focus().redo().run());
+        return true;
+      default:
+        return false;
+    }
+  }
+
   // Close all dropdowns
   const closeDropdowns = () => {
     showTableMenu.value = false;
@@ -303,6 +373,7 @@ export function useToolbarActions() {
 
     // Footnote
     insertFootnote,
+    runWritingAction,
 
     // Dedication
     showDedication,

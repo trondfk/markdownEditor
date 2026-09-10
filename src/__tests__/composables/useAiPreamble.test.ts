@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import {
+  accessMapForMode,
+  ASK_MODE_INSTRUCTIONS,
+  PLAN_MODE_INSTRUCTIONS,
   buildDocAttachment,
   buildStaticPreamble,
   buildTurnContext,
@@ -41,6 +44,7 @@ describe('useAiPreamble.buildStaticPreamble', () => {
     expect(out).toMatch(/Write paths: \/w\/a.md/);
     expect(out).toContain('USE YOUR Edit / Write TOOLS');
     expect(out).toContain('For chat-only answers');
+    expect(out).toContain('Raster images in the note');
   });
 
   it('serialises allowed tools from access map', () => {
@@ -93,6 +97,7 @@ describe('useAiPreamble.buildStaticPreamble', () => {
     it('mentions list_dir for enumerating granted folders when localTools is set', () => {
       const out = buildStaticPreamble({ ...base(), localTools: true });
       expect(out).toContain('list_dir(path)');
+      expect(out).toContain('search_files(query, path)');
       expect(out).toMatch(/enumerate/i);
     });
 
@@ -133,6 +138,7 @@ describe('useAiPreamble.buildStaticPreamble', () => {
       });
       expect(out).toContain('read_file(path)');
       expect(out).not.toContain('no file tools');
+      expect(out).not.toMatch(/MUST call edit_file/);
     });
 
     it('mentions the per-message doc attachment only in the file-tools branch', () => {
@@ -174,6 +180,73 @@ describe('useAiPreamble.buildStaticPreamble', () => {
         workspaceRoot: '/x/y',
       });
       expect(out).toContain('Workspace: /x/y');
+    });
+  });
+
+  describe('user instructions and modes', () => {
+    it('omits User instructions when empty', () => {
+      const out = buildStaticPreamble(base());
+      expect(out).not.toContain('User instructions:');
+    });
+
+    it('appends custom instructions after the safety preamble', () => {
+      const out = buildStaticPreamble({
+        ...base(),
+        customInstructions: 'Always reply in nynorsk.',
+      });
+      expect(out.indexOf('only writable target')).toBeLessThan(out.indexOf('User instructions:'));
+      expect(out).toContain('Always reply in nynorsk.');
+      expect(out).not.toContain(ASK_MODE_INSTRUCTIONS);
+    });
+
+    it('changes the hash when custom instructions change', () => {
+      const a = hashPreamble(buildStaticPreamble(base()));
+      const b = hashPreamble(buildStaticPreamble({
+        ...base(),
+        customInstructions: 'Be terse.',
+      }));
+      expect(a).not.toBe(b);
+    });
+
+    it('Ask mode tells the model not to edit', () => {
+      const out = buildStaticPreamble({
+        ...base(),
+        assistantMode: 'ask',
+        accessMap: { ...accessMap, tools: { fileRead: true, fileWrite: false, bash: false, network: false } },
+      });
+      expect(out).toContain('ASK MODE');
+      expect(out).not.toMatch(/USE YOUR Edit \/ Write TOOLS/);
+    });
+
+    it('Plan mode asks for a numbered plan and no file changes', () => {
+      const out = buildStaticPreamble({
+        ...base(),
+        assistantMode: 'plan',
+        accessMap: { ...accessMap, tools: { fileRead: true, fileWrite: false, bash: false, network: false } },
+      });
+    expect(out).toContain('PLAN MODE');
+      expect(out).toContain(PLAN_MODE_INSTRUCTIONS);
+      expect(out).toContain('numbered plan');
+    });
+
+    it('appends project instructions after user instructions', () => {
+      const out = buildStaticPreamble({
+        ...base(),
+        customInstructions: 'User rule.',
+        projectInstructions: 'Project rule.',
+      });
+      expect(out.indexOf('User rule.')).toBeLessThan(out.indexOf('Project rule.'));
+    });
+
+    it('mentions workspace markdown writes when opted in', () => {
+      const out = buildStaticPreamble({
+        ...base(),
+        workspaceWrite: true,
+        workspaceRoot: '/work',
+        workspaceName: 'notes',
+      });
+      expect(out).toContain('You may WRITE markdown files');
+      expect(out).not.toContain('only writable target');
     });
   });
 });
@@ -234,7 +307,16 @@ describe('useAiPreamble.buildTurnContext', () => {
     expect(out).toContain('The user attached');
   });
 
-  it('includes unsaved doc warning when docNeedsSave', () => {
+  it('lists local images in the turn context', () => {
+    const out = buildTurnContext({
+      ...base(),
+      docImages: [{ alt: 'Gantt', absolutePath: 'D:/notes/gantt.png' }],
+    });
+    expect(out).toContain('D:/notes/gantt.png');
+    expect(out).toContain('Gantt');
+  });
+
+  it('mentions unsaved documents so tools are not used', () => {
     const out = buildTurnContext({ ...base(), docNeedsSave: true });
     expect(out).toContain('IMPORTANT: The document is not saved yet');
   });
@@ -299,6 +381,20 @@ describe('useAiPreamble.buildTurnContext', () => {
     expect(order.every(i => i >= 0)).toBe(true);
     expect([...order].sort((a, b) => a - b)).toEqual(order);
   });
+
+  it('lists attached files with excerpts or a Read hint', () => {
+    const out = buildTurnContext({
+      ...base(),
+      attachedFiles: [
+        { path: '/r/a.md', name: 'a.md', kind: 'file', excerpt: 'hello' },
+        { path: '/r/sub', name: 'sub', kind: 'folder' },
+      ],
+    });
+    expect(out).toContain('Attached files:');
+    expect(out).toContain('/r/a.md');
+    expect(out).toContain('hello');
+    expect(out).toContain('list_dir');
+  });
 });
 
 describe('useAiPreamble.buildDocAttachment', () => {
@@ -335,6 +431,20 @@ describe('useAiPreamble.buildDocAttachment', () => {
   it('falls back to the default num_ctx when the setting is not finite', () => {
     const doc = 'x'.repeat(16384);
     expect(buildDocAttachment('ollama', doc, Number.NaN)).toEqual({ content: doc });
+  });
+});
+
+describe('useAiPreamble.accessMapForMode', () => {
+  it('Ask and Plan drop write and bash', () => {
+    const ask = accessMapForMode(accessMap, 'ask');
+    expect(ask?.tools.fileWrite).toBe(false);
+    expect(ask?.tools.bash).toBe(false);
+    expect(ask?.tools.fileRead).toBe(true);
+    expect(accessMapForMode(accessMap, 'plan')?.tools.fileWrite).toBe(false);
+  });
+
+  it('Agent leaves the map unchanged', () => {
+    expect(accessMapForMode(accessMap, 'agent')).toBe(accessMap);
   });
 });
 

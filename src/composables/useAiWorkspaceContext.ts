@@ -1,19 +1,14 @@
-import type { AccessMap } from '../services/aiCommands';
+// ABOUTME: Folds workspace roots into the AI access map for a send.
+// ABOUTME: Reads are always granted; writes stay on the main file unless opted in.
 
-/**
- * Pure helpers that fold workspace context into AI requests.
- *
- * The model is bound to a *single main file* per chat (`docPath`), but when
- * that file lives inside an open workspace we want the assistant to be able
- * to *read* the surrounding files for context. Writes still target only the
- * active doc — the workspace is reference material, not a free-for-all.
- */
+import type { AccessMap } from '../services/aiCommands';
+import type { AssistantMode } from './useSettings';
+import { accessMapForMode } from './useAiPreamble';
 
 /**
  * Returns a copy of `accessMap` with the workspace root added to `readPaths`
  * (deduplicated). When `workspaceRoot` is empty, the input is returned
- * unchanged. `writePaths` is never modified — the active file remains the
- * only writable target.
+ * unchanged. `writePaths` is never modified here.
  */
 export function withWorkspaceReadAccess(
   accessMap: AccessMap | null,
@@ -26,4 +21,34 @@ export function withWorkspaceReadAccess(
     ...accessMap,
     readPaths: [...accessMap.readPaths, workspaceRoot],
   };
+}
+
+/**
+ * Adds the workspace root to writePaths when the user opted in. First
+ * write path stays the active document so the backend still treats it as main.
+ */
+export function withWorkspaceWriteAccess(
+  accessMap: AccessMap | null,
+  workspaceRoot: string,
+  enabled: boolean,
+): AccessMap | null {
+  if (!accessMap || !enabled || !workspaceRoot) return accessMap;
+  if (accessMap.writePaths.includes(workspaceRoot)) return accessMap;
+  return {
+    ...accessMap,
+    writePaths: [...accessMap.writePaths, workspaceRoot],
+  };
+}
+
+/** Read access, optional workspace writes, then Ask/Plan write gating. */
+export function accessMapForSend(
+  accessMap: AccessMap | null,
+  workspaceRoot: string,
+  mode: AssistantMode,
+  workspaceWrite: boolean,
+): AccessMap | null {
+  const withRead = withWorkspaceReadAccess(accessMap, workspaceRoot);
+  const allowWsWrite = workspaceWrite && mode === 'agent';
+  const withWrite = withWorkspaceWriteAccess(withRead, workspaceRoot, allowWsWrite);
+  return accessMapForMode(withWrite, mode);
 }

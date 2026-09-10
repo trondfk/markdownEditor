@@ -20,6 +20,21 @@ export type ThemeMode = 'light' | 'dark';
 export type ThemeVariant = 'default' | 'minimal';
 export type CodeThemeMode = 'dark' | 'white';
 export type CliKind = 'claude' | 'codex' | 'ollama' | 'openai';
+
+/** Ask: chat only. Agent: may edit. Plan: numbered plan, no edits. */
+export type AssistantMode = 'ask' | 'agent' | 'plan';
+
+export const CUSTOM_INSTRUCTIONS_MAX = 4000;
+export const PROJECT_INSTRUCTIONS_MAX = 4000;
+
+export function clampAiInstructions(s: string, max = CUSTOM_INSTRUCTIONS_MAX): string {
+  return (s ?? '').trim().slice(0, max);
+}
+
+export function parseAssistantMode(v: unknown): AssistantMode {
+  if (v === 'ask' || v === 'agent' || v === 'plan') return v;
+  return 'agent';
+}
 export type PanelSide = 'left' | 'right';
 
 export const OLLAMA_DEFAULT_BASE_URL = 'http://localhost:11434';
@@ -100,6 +115,14 @@ export interface AiSettings {
   cliResolvedPathClaude: string;
   /** Last-known-good resolved path for `codex`; same semantics as above. */
   cliResolvedPathCodex: string;
+  /** User-authored rules appended after the fixed safety preamble. */
+  customInstructions: string;
+  /** Ask replies only; agent may edit; plan writes a numbered plan. */
+  assistantMode: AssistantMode;
+  /** When true, MERMARK.md / AGENTS.md in the workspace root join the preamble. */
+  useProjectInstructions: boolean;
+  /** When true, agent mode may write markdown under the workspace root. */
+  workspaceWrite: boolean;
 }
 
 export interface FontPreset {
@@ -253,6 +276,12 @@ function loadSettings(): AppSettings {
       // Deep-merge the ai field so new fields added in updates get their defaults
       // even when localStorage holds an older partial ai object.
       const mergedAi = { ...defaults.ai, ...(parsed.ai ?? {}) };
+      mergedAi.customInstructions = clampAiInstructions(
+        typeof mergedAi.customInstructions === 'string' ? mergedAi.customInstructions : '',
+      );
+      mergedAi.assistantMode = parseAssistantMode(mergedAi.assistantMode);
+      if (typeof mergedAi.useProjectInstructions !== 'boolean') mergedAi.useProjectInstructions = true;
+      if (typeof mergedAi.workspaceWrite !== 'boolean') mergedAi.workspaceWrite = false;
       const mergedWorkspace = { ...defaults.workspace, ...(parsed.workspace ?? {}) };
       // Normalize sort settings — legacy builds stored 'name' | 'modified'.
       mergedWorkspace.sortMode = migrateSortMode(mergedWorkspace.sortMode as unknown as string);
@@ -410,6 +439,10 @@ function getDefaultSettings(): AppSettings {
       cliPathCodex: '',
       cliResolvedPathClaude: '',
       cliResolvedPathCodex: '',
+      customInstructions: '',
+      assistantMode: 'agent',
+      useProjectInstructions: true,
+      workspaceWrite: false,
     },
   };
 }
@@ -698,6 +731,18 @@ export function useSettings() {
   const setAiCliPathCodex = (v: string) => { settings.value.ai.cliPathCodex = v.trim(); };
   const setAiCliResolvedPathClaude = (v: string) => { settings.value.ai.cliResolvedPathClaude = (v ?? '').trim(); };
   const setAiCliResolvedPathCodex = (v: string) => { settings.value.ai.cliResolvedPathCodex = (v ?? '').trim(); };
+  const setAiCustomInstructions = (v: string) => {
+    settings.value.ai.customInstructions = clampAiInstructions(v);
+  };
+  const setAiAssistantMode = (v: AssistantMode) => {
+    settings.value.ai.assistantMode = parseAssistantMode(v);
+  };
+  const setAiUseProjectInstructions = (v: boolean) => {
+    settings.value.ai.useProjectInstructions = v;
+  };
+  const setAiWorkspaceWrite = (v: boolean) => {
+    settings.value.ai.workspaceWrite = v;
+  };
 
   return {
     settings,
@@ -758,6 +803,10 @@ export function useSettings() {
     setAiCliPathCodex,
     setAiCliResolvedPathClaude,
     setAiCliResolvedPathCodex,
+    setAiCustomInstructions,
+    setAiAssistantMode,
+    setAiUseProjectInstructions,
+    setAiWorkspaceWrite,
   };
 }
 

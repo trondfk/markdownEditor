@@ -3,6 +3,11 @@ import { aiCommands, type AiSendRequest, type AiResponseChunk, type CliKind, typ
 import { useAiContext } from './useAiContext';
 import { useSettings, OLLAMA_MIN_NUM_CTX } from './useSettings';
 import { clampSummary, compactionTurnText, lastCompactionIndex } from '../utils/ai-compaction';
+import { classifyAiTool } from '../utils/ai-tool-kind';
+
+function classifyEditPending(tool: string | undefined): 'pending' | undefined {
+  return classifyAiTool(tool) === 'edit' ? 'pending' : undefined;
+}
 
 export interface AttachedPin {
   id: string;
@@ -27,9 +32,18 @@ export interface AiMessage {
   imageAttachments?: AttachedImage[];
   /** When role === 'compaction', how many messages the summary stands in for. */
   compactedCount?: number;
+  /** Write/Edit cards: Keep / Undo after the agent touched a file. */
+  changeStatus?: 'pending' | 'kept' | 'undone';
   error?: string;
   done: boolean;
 }
+
+/** No stream chunk for this long: show "looks stuck" but keep waiting. */
+export const AI_STALL_WARN_MS = 90_000;
+/** No stream chunk for this long: cancel the turn so isSending cannot hang. */
+export const AI_STALL_CANCEL_MS = 180_000;
+/** After Cancel, wait this long for an Error chunk before synthesising one. */
+export const AI_CANCEL_GRACE_MS = 1_500;
 
 export interface AiThread {
   id: string;
@@ -167,6 +181,15 @@ const store = ref<ThreadStore>(emptyStore());
 const isSending = ref(false);
 const isCompacting = ref(false);
 const inFlightRequestId = ref<string | null>(null);
+/** Thread that owns the in-flight send; spinner follows this id, not the visible tab. */
+const sendingThreadId = ref<string | null>(null);
+const sendStartedAt = ref<number | null>(null);
+const lastChunkAt = ref<number | null>(null);
+const lastToolName = ref<string | null>(null);
+const isStalled = ref(false);
+
+/** Completes a hung stream if Cancel / stall never got a terminal chunk. */
+let forceFinish: ((message: string) => void) | null = null;
 
 const activeThread = computed<AiThread | null>(() => {
   if (!store.value.activeId) return null;
@@ -250,10 +273,35 @@ function pushMessage(msg: AiMessage) {
   }
 }
 
-function getAssistantInActive(idx: number): AiMessage | undefined {
-  const t = activeThread.value;
-  if (!t) return undefined;
-  return t.messages[idx];
+function getMessageAt(threadId: string, idx: number): AiMessage | undefined {
+  return store.value.threads.find(th => th.id === threadId)?.messages[idx];
+}
+
+const isActiveThreadSending = computed(() =>
+  isSending.value && sendingThreadId.value != null && sendingThreadId.value === store.value.activeId
+);
+
+function noteChunk(tool?: string) {
+  lastChunkAt.value = Date.now();
+  isStalled.value = false;
+  if (tool) lastToolName.value = tool;
+}
+
+function beginSendClock(threadId: string | null) {
+  sendingThreadId.value = threadId;
+  sendStartedAt.value = Date.now();
+  lastChunkAt.value = Date.now();
+  lastToolName.value = null;
+  isStalled.value = false;
+}
+
+function endSendClock() {
+  isSending.value = false;
+  sendingThreadId.value = null;
+  sendStartedAt.value = null;
+  lastChunkAt.value = null;
+  lastToolName.value = null;
+  isStalled.value = false;
 }
 
 /** Archive current thread (no-op if empty), start a fresh one. */
@@ -361,19 +409,53 @@ async function runStream(
   const requestId = crypto.randomUUID();
   inFlightRequestId.value = requestId;
 
+  let finished = false;
   let resolveCompletion!: () => void;
   const completion = new Promise<void>((r) => { resolveCompletion = r; });
 
+  const finish = () => {
+    if (finished) return;
+    finished = true;
+    resolveCompletion();
+  };
+
   const unlisten = await aiCommands.onStream(requestId, (chunk: AiResponseChunk) => {
-    onChunk(chunk, resolveCompletion);
+    if (chunk.kind === 'tool_request') noteChunk(chunk.tool);
+    else noteChunk();
+    onChunk(chunk, finish);
   });
+
+  const stallTimer = setInterval(() => {
+    if (finished || lastChunkAt.value == null) return;
+    const silentFor = Date.now() - lastChunkAt.value;
+    if (silentFor >= AI_STALL_CANCEL_MS) {
+      isStalled.value = true;
+      void Promise.resolve(aiCommands.cancel(requestId)).catch(() => {});
+      onChunk({
+        kind: 'error',
+        message: 'AI stalled: no response for 3 minutes.',
+        exitCode: null,
+      }, finish);
+    } else if (silentFor >= AI_STALL_WARN_MS) {
+      isStalled.value = true;
+    }
+  }, 1_000);
+
+  forceFinish = (message: string) => {
+    window.setTimeout(() => {
+      if (finished) return;
+      onChunk({ kind: 'error', message, exitCode: null }, finish);
+    }, AI_CANCEL_GRACE_MS);
+  };
 
   try {
     await aiCommands.send(buildRequest(opts), requestId);
     await completion;
   } finally {
+    clearInterval(stallTimer);
     unlisten();
     inFlightRequestId.value = null;
+    forceFinish = null;
   }
 }
 
@@ -399,27 +481,27 @@ export function useAi() {
     t.effort = opts.effort;
     const targetThreadId = t.id;
     const assistantIdx = t.messages.length - 1;
-    const getAssistant = () => getAssistantInActive(assistantIdx)!;
+    beginSendClock(targetThreadId);
+    const getAssistant = () => getMessageAt(targetThreadId, assistantIdx);
 
     try {
       await runStream({ ...opts, history }, (chunk, finish) => {
         const a = getAssistant();
-        if (!a) return;
         switch (chunk.kind) {
           case 'text':
-            a.text += chunk.content;
+            if (a) a.text += chunk.content;
             break;
           case 'tool_request': {
-            // Append a permanent tool entry into the chat history.
-            const t = activeThread.value;
-            if (t) {
-              t.messages.push({
+            const tt = store.value.threads.find(th => th.id === targetThreadId);
+            if (tt) {
+              tt.messages.push({
                 role: 'tool',
                 text: typeof chunk.args === 'object' ? JSON.stringify(chunk.args) : String(chunk.args ?? ''),
                 tool: chunk.tool,
+                changeStatus: classifyEditPending(chunk.tool),
                 done: true,
               });
-              t.updatedAt = new Date().toISOString();
+              tt.updatedAt = new Date().toISOString();
             }
             opts.onToolRequest?.(chunk.tool, chunk.args, chunk.requestId);
             break;
@@ -428,10 +510,8 @@ export function useAi() {
             opts.onToolDenied?.(chunk.tool, chunk.reason);
             break;
           case 'done': {
-            a.done = true;
+            if (a) a.done = true;
             aiContext.record(opts.cli, chunk.usage);
-            // Resolve by id — the user may have switched threads mid-stream, so
-            // the active thread is not necessarily the one this send targeted.
             const tt = store.value.threads.find(th => th.id === targetThreadId);
             if (tt) {
               if (chunk.sessionId) tt.sessionId = chunk.sessionId;
@@ -446,8 +526,10 @@ export function useAi() {
             break;
           }
           case 'error':
-            a.error = chunk.message;
-            a.done = true;
+            if (a) {
+              a.error = chunk.message;
+              a.done = true;
+            }
             finish();
             break;
         }
@@ -460,7 +542,7 @@ export function useAi() {
         a.done = true;
       }
     } finally {
-      isSending.value = false;
+      endSendClock();
     }
     return getAssistant();
   }
@@ -474,6 +556,7 @@ export function useAi() {
   async function sendSilent(opts: SilentSendOpts): Promise<string> {
     if (isSending.value) throw new Error('A send is already in flight');
     isSending.value = true;
+    beginSendClock(activeThread.value?.id ?? null);
     // The CLI agents still hold the conversation in their session, so they get
     // the bare instruction; the local providers only know what we replay.
     const isLocal = opts.cli === 'ollama' || opts.cli === 'openai';
@@ -499,7 +582,7 @@ export function useAi() {
         },
       );
     } finally {
-      isSending.value = false;
+      endSendClock();
     }
     if (failure) throw new Error(failure);
     return text.trim();
@@ -529,8 +612,20 @@ export function useAi() {
 
   async function cancel() {
     if (inFlightRequestId.value) {
-      await aiCommands.cancel(inFlightRequestId.value);
+      try {
+        await aiCommands.cancel(inFlightRequestId.value);
+      } catch (e) {
+        console.error('[useAi] cancel failed:', e);
+      }
     }
+    // If the provider never emits Error, forceFinish unlocks isSending.
+    forceFinish?.('Cancelled');
+  }
+
+  function setChangeStatus(index: number, status: 'kept' | 'undone') {
+    const t = activeThread.value;
+    const m = t?.messages[index];
+    if (m) m.changeStatus = status;
   }
 
   /**
@@ -546,6 +641,12 @@ export function useAi() {
     messages,
     isSending,
     isCompacting,
+    isActiveThreadSending,
+    sendingThreadId,
+    sendStartedAt,
+    lastChunkAt,
+    lastToolName,
+    isStalled,
     inFlightRequestId,
     send,
     sendSilent,
@@ -557,6 +658,7 @@ export function useAi() {
       return idx >= 0 ? msgs[idx].text : null;
     }),
     cancel,
+    setChangeStatus,
     clearMessages,
     pushAttachment,
     bypassEnabled,

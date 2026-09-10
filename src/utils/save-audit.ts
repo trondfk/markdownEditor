@@ -117,7 +117,29 @@ export function auditShrink(
   const report = describeShrink(next, previous);
   if (!report) return;
   console.warn(
+
     `[save-audit] ${trigger} dropped ${report.lostChars} of ${report.previousChars} characters in ${filePath}`,
   );
   void recordShrink(trigger, filePath, report);
+}
+
+/** Last N shrink-audit rows for a local bug report. Never throws. */
+export async function readShrinkLogTail(limit = 10): Promise<SaveAuditEntry[]> {
+  try {
+    const dir = await appDataDir();
+    const path = await join(dir, LOG_FILE_NAME);
+    const existing = await readTextFile(path);
+    const lines = existing.split('\n').filter(line => line.trim() !== '');
+    const out: SaveAuditEntry[] = [];
+    for (const line of lines.slice(-limit)) {
+      try {
+        out.push(JSON.parse(line) as SaveAuditEntry);
+      } catch {
+        /* skip a corrupt line */
+      }
+    }
+    return out;
+  } catch {
+    return [];
+  }
 }

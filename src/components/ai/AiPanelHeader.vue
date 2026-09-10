@@ -1,35 +1,17 @@
+<!-- ABOUTME: Title, window controls, and thread actions for the AI panel.
+     ABOUTME: Model and CLI picking lives on the composer chip, not here. -->
 <script setup lang="ts">
-import { computed } from 'vue';
-import type { CliKind } from '../../services/aiCommands';
-import { CUSTOM_MODEL_SENTINEL } from '../../composables/useAiModels';
 import AiPanelThreadDropdown from './AiPanelThreadDropdown.vue';
 import { useI18n } from '../../i18n';
 import type { AiThread } from '../../composables/useAi';
 
 const { t } = useI18n();
 
-interface ModelOption { id: string; label: string; custom?: boolean }
-interface EffortOption { id: string; label: string }
-
-const props = defineProps<{
-  cli: CliKind;
-  availableClis: CliKind[];
-  model: string;
-  modelOptions: ModelOption[];
-  effort: string;
-  effortOptions: EffortOption[];
-  customModelInput: string;
-  isCustomModel: boolean;
-  cliConnected: boolean;
-  cliAccount: string;
+defineProps<{
   threads: AiThread[];
   activeThreadId: string | null;
   fullscreen: boolean;
   titleText: string;
-  statusOkLabel: (account: string) => string;
-  statusAuthLabel: string;
-  modelTitle: string;
-  defaultCliTitle: string;
   fullscreenTitle: string;
   exitFullscreenTitle: string;
   closeTitle: string;
@@ -37,10 +19,6 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
-  'update:cli': [value: CliKind];
-  'update:model': [value: string];
-  'update:effort': [value: string];
-  'update:customModelInput': [value: string];
   minimize: [];
   toggleFullscreen: [];
   close: [];
@@ -50,28 +28,6 @@ const emit = defineEmits<{
   deleteThread: [id: string];
   threadsRef: [el: HTMLDetailsElement | null];
 }>();
-
-const modelSelectValue = computed(() => props.isCustomModel ? CUSTOM_MODEL_SENTINEL : props.model);
-
-const CLI_LABELS: Record<CliKind, string> = { claude: 'Claude', codex: 'Codex', ollama: 'Ollama', openai: 'OpenAI-compatible' };
-function cliLabel(c: CliKind): string { return CLI_LABELS[c] ?? c; }
-
-function onModelChange(e: Event) {
-  const id = (e.target as HTMLSelectElement).value;
-  if (id === CUSTOM_MODEL_SENTINEL) {
-    const next = props.customModelInput || props.model;
-    emit('update:customModelInput', next);
-    emit('update:model', next);
-  } else {
-    emit('update:model', id);
-  }
-}
-
-function onCustomModelInput(e: Event) {
-  const v = (e.target as HTMLInputElement).value;
-  emit('update:customModelInput', v);
-  emit('update:model', v);
-}
 </script>
 
 <template>
@@ -92,6 +48,25 @@ function onCustomModelInput(e: Event) {
         </svg>
         <strong>{{ titleText }}</strong>
       </div>
+      <div class="ai-panel__actions">
+        <button
+          class="ai-panel__icon-btn"
+          @click="emit('revert')"
+          :title="t.aiRevertSnapshot"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-15-6.7L3 13"/></svg>
+        </button>
+        <AiPanelThreadDropdown
+          :threads="threads"
+          :active-thread-id="activeThreadId"
+          @select="(id) => emit('selectThread', id)"
+          @delete="(id) => emit('deleteThread', id)"
+          @ref="(el) => emit('threadsRef', el)"
+        />
+        <button class="ai-panel__icon-btn" @click="emit('newChat')" :title="newChatTitle">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
+        </button>
+      </div>
       <div class="ai-panel__window-controls">
         <button class="ai-panel__win-btn" @click="emit('minimize')" :title="t.aiMinimizeToTab">
           <svg width="10" height="10" viewBox="0 0 10 10"><rect x="1" y="8" width="8" height="1" fill="currentColor"/></svg>
@@ -105,68 +80,6 @@ function onCustomModelInput(e: Event) {
         </button>
       </div>
     </div>
-
-    <div class="ai-panel__model-group">
-      <span
-        class="ai-panel__status-dot"
-        :class="cliConnected ? 'ai-panel__status-dot--ok' : 'ai-panel__status-dot--err'"
-        :title="cliConnected ? statusOkLabel(cliAccount) : statusAuthLabel"
-      />
-      <select
-        :value="cli"
-        @change="emit('update:cli', ($event.target as HTMLSelectElement).value as CliKind)"
-        class="ai-panel__select"
-        :title="defaultCliTitle"
-      >
-        <option v-for="c in availableClis" :key="c" :value="c">{{ cliLabel(c) }}</option>
-      </select>
-      <select
-        class="ai-panel__select ai-panel__select--model"
-        :value="modelSelectValue"
-        @change="onModelChange"
-        :title="modelTitle"
-      >
-        <option v-for="m in modelOptions" :key="m.id" :value="m.id">{{ m.label }}</option>
-      </select>
-      <input
-        v-if="isCustomModel"
-        class="ai-panel__select ai-panel__select--custom"
-        type="text"
-        :value="customModelInput"
-        @input="onCustomModelInput"
-        :placeholder="t.aiSettingsModelIdPlaceholder"
-        :title="modelTitle"
-      />
-      <select
-        v-if="effortOptions.length > 0"
-        :value="effort"
-        @change="emit('update:effort', ($event.target as HTMLSelectElement).value)"
-        class="ai-panel__select"
-        :title="t.aiEffort"
-      >
-        <option v-for="e in effortOptions" :key="e.id" :value="e.id">{{ e.label }}</option>
-      </select>
-    </div>
-
-    <div class="ai-panel__actions">
-      <button
-        class="ai-panel__icon-btn"
-        @click="emit('revert')"
-        :title="t.aiRevertSnapshot"
-      >
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-15-6.7L3 13"/></svg>
-      </button>
-      <AiPanelThreadDropdown
-        :threads="threads"
-        :active-thread-id="activeThreadId"
-        @select="(id) => emit('selectThread', id)"
-        @delete="(id) => emit('deleteThread', id)"
-        @ref="(el) => emit('threadsRef', el)"
-      />
-      <button class="ai-panel__icon-btn" @click="emit('newChat')" :title="newChatTitle">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
-      </button>
-    </div>
   </header>
 </template>
 
@@ -174,39 +87,13 @@ function onCustomModelInput(e: Event) {
 .ai-panel__header {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 8px 12px 10px;
+  padding: 8px 12px;
   background: linear-gradient(180deg, var(--toolbar-gradient-from), var(--toolbar-gradient-to));
   border-bottom: 1px solid var(--border-primary);
 }
 .ai-panel__icon {
   color: var(--primary);
 }
-.ai-panel__model-group {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-.ai-panel__status-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-.ai-panel__status-dot--ok { background: var(--success); box-shadow: 0 0 0 2px rgba(16,185,129,0.18); }
-.ai-panel__status-dot--err { background: var(--danger); }
-.ai-panel__select {
-  background: var(--bg-input, var(--bg-secondary));
-  color: var(--text-primary);
-  border: 1px solid var(--border-primary);
-  border-radius: 4px;
-  padding: 3px 6px;
-  font-size: 12px;
-  cursor: pointer;
-}
-.ai-panel__select--model { min-width: 110px; }
-.ai-panel__select--custom { min-width: 130px; }
 .ai-panel__actions {
   display: flex;
   gap: 4px;
@@ -234,20 +121,19 @@ function onCustomModelInput(e: Event) {
   display: flex;
   align-items: center;
   width: 100%;
-  margin-bottom: 6px;
+  gap: 6px;
 }
 .ai-panel__title-group {
   display: flex;
   align-items: center;
   gap: 6px;
   font-size: 14px;
-  flex: 1;
+  min-width: 0;
 }
 .ai-panel__window-controls {
   display: flex;
   align-items: center;
   gap: 2px;
-  margin-left: auto;
 }
 
 .ai-panel__win-btn {

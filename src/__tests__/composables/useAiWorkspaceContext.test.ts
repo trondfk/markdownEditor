@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { withWorkspaceReadAccess } from '../../composables/useAiWorkspaceContext';
+import {
+  withWorkspaceReadAccess,
+  withWorkspaceWriteAccess,
+  accessMapForSend,
+} from '../../composables/useAiWorkspaceContext';
 import type { AccessMap } from '../../services/aiCommands';
 
 function makeMap(): AccessMap {
@@ -44,5 +48,32 @@ describe('withWorkspaceReadAccess', () => {
     const out = withWorkspaceReadAccess(before, '/work');
     expect(out).not.toBe(before);
     expect(before.readPaths).toEqual(['/r/a.md']);
+  });
+});
+
+describe('withWorkspaceWriteAccess', () => {
+  it('appends workspace root to writePaths when enabled', () => {
+    const out = withWorkspaceWriteAccess(makeMap(), '/work', true);
+    expect(out?.writePaths).toEqual(['/w/a.md', '/work']);
+  });
+
+  it('does not append when disabled', () => {
+    const before = makeMap();
+    expect(withWorkspaceWriteAccess(before, '/work', false)).toBe(before);
+  });
+});
+
+describe('accessMapForSend', () => {
+  it('Ask mode drops write even when workspaceWrite is on', () => {
+    const out = accessMapForSend(makeMap(), '/work', 'ask', true);
+    expect(out?.tools.fileWrite).toBe(false);
+    expect(out?.readPaths).toContain('/work');
+    expect(out?.writePaths).not.toContain('/work');
+  });
+
+  it('Agent with workspaceWrite adds the root to writePaths', () => {
+    const out = accessMapForSend(makeMap(), '/work', 'agent', true);
+    expect(out?.tools.fileWrite).toBe(true);
+    expect(out?.writePaths).toEqual(['/w/a.md', '/work']);
   });
 });

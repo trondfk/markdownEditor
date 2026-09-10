@@ -1,11 +1,25 @@
 import type { AccessMap, CliKind } from '../services/aiCommands';
 import type { MermaidFormat } from '../utils/mermaid-formats';
 import { compactionTurnText } from '../utils/ai-compaction';
-import { OLLAMA_DEFAULT_NUM_CTX, OLLAMA_MIN_NUM_CTX } from './useSettings';
+import {
+  OLLAMA_DEFAULT_NUM_CTX,
+  OLLAMA_MIN_NUM_CTX,
+  clampAiInstructions,
+  type AssistantMode,
+  CUSTOM_INSTRUCTIONS_MAX,
+  PROJECT_INSTRUCTIONS_MAX,
+} from './useSettings';
 
 export interface PinnedRef {
   id: string;
   text: string;
+}
+
+export interface AttachedRef {
+  path: string;
+  name: string;
+  kind: 'file' | 'folder';
+  excerpt?: string;
 }
 
 export interface PreambleOptions {
@@ -30,6 +44,8 @@ export interface PreambleOptions {
    *  parses any enabled read format, but pinning the write format means the
    *  AI reply round-trips through save without delimiter swaps. */
   mermaidWriteFormat?: MermaidFormat;
+  /** Raster images in the active note (local files). */
+  docImages?: { alt: string; absolutePath: string }[];
   /** True for the local HTTP providers (ollama, openai), which drive an
    *  app-side tool-calling loop with read_file/write_file/edit_file rather
    *  than the claude/codex CLI Edit/Write tools. Switches the edit
@@ -40,6 +56,33 @@ export interface PreambleOptions {
    *  same summary in their replayed history, and sending it twice would both
    *  waste the context compaction just freed and read as a repeated turn. */
   compactionSummary?: string;
+  assistantMode?: AssistantMode;
+  customInstructions?: string;
+  projectInstructions?: string;
+  /** When true, markdown under the workspace root may be written (agent mode). */
+  workspaceWrite?: boolean;
+  attachedFiles?: AttachedRef[];
+}
+
+export const PLAN_MODE_INSTRUCTIONS = [
+  'PLAN MODE: reply with a numbered plan only.',
+  'Do not call Edit, Write, write_file, or edit_file.',
+  'Do not change any files. Wait until the user asks you to carry the plan out.',
+].join(' ');
+
+export const ASK_MODE_INSTRUCTIONS =
+  'ASK MODE: answer in chat only. Do not call Edit, Write, write_file, edit_file, or Bash.';
+
+/**
+ * Ask and Plan drop write/shell tools for this send. Agent keeps the map as-is.
+ */
+export function accessMapForMode(map: AccessMap | null, mode: AssistantMode): AccessMap | null {
+  if (!map) return map;
+  if (mode === 'agent') return map;
+  return {
+    ...map,
+    tools: { ...map.tools, fileWrite: false, bash: false },
+  };
 }
 
 interface PinScopeStrings {
@@ -71,17 +114,27 @@ export const PIN_SCOPE_INSTRUCTIONS: Record<string, PinScopeStrings> = {
  */
 export function buildStaticPreamble(opts: PreambleOptions): string {
   const am = opts.accessMap;
+  const mode: AssistantMode = opts.assistantMode ?? 'agent';
+  const canWrite = !!(am && am.tools.fileWrite);
+  const canRead = !!(am && am.tools.fileRead);
   const tools = am
     ? Object.entries(am.tools).filter(([, v]) => v).map(([k]) => k).join(',') || 'none'
     : 'unknown';
+  const writableGuidance = opts.workspaceWrite && opts.workspaceRoot && canWrite
+    ? `You may WRITE markdown files (.md / .markdown) under the workspace root as well as the main file. Prefer the main file unless the user asks to change another note.`
+    : `The main file lives inside this workspace. You may READ other files in the workspace for context (notes, references, related documents) but you must only WRITE to the main file. When the user says "the project" / "this notebook" / "these notes", they mean the workspace above.`;
   const mainFileLine = opts.docPath
-    ? `Main file (the document the user is editing — your only writable target): ${opts.docPath}`
+    ? (opts.workspaceWrite && canWrite
+      ? `Main file (the document the user is editing): ${opts.docPath}`
+      : `Main file (the document the user is editing — your only writable target): ${opts.docPath}`)
     : 'Main file: (unsaved — no edits possible until user saves)';
   const workspaceLines = opts.workspaceRoot
     ? [
         `Workspace: ${opts.workspaceName || opts.workspaceRoot}`,
-        `Workspace root (read-only context): ${opts.workspaceRoot}`,
-        `The main file lives inside this workspace. You may READ other files in the workspace for context (notes, references, related documents) but you must only WRITE to the main file. When the user says "the project" / "this notebook" / "these notes", they mean the workspace above.`,
+        opts.workspaceWrite && canWrite
+          ? `Workspace root: ${opts.workspaceRoot}`
+          : `Workspace root (read-only context): ${opts.workspaceRoot}`,
+        writableGuidance,
       ]
     : [];
   const lines = [
@@ -94,32 +147,59 @@ export function buildStaticPreamble(opts: PreambleOptions): string {
     ``,
   ];
   if (opts.localTools) {
-    const hasFileTools = !!(am && (am.tools.fileRead || am.tools.fileWrite));
-    if (hasFileTools) {
-      lines.push(
-        `You have these tools available: read_file(path), list_dir(path), write_file(path, content), edit_file(path, old_string, new_string). The only writable target is the active document above; reads are limited to its folder plus any granted read paths.`,
-        `To explore a granted folder, call list_dir(path) to enumerate its files and subfolders before reading individual files with read_file — read_file works on files only, not directories.`,
-        `When the user asks for edits to the active file, you MUST call edit_file (for a small change) or write_file (to replace the whole file) to apply it on disk. The host reloads the editor from disk after the tools run.`,
-        `read_file and list_dir are always allowed; never ask the user to open or paste files.`,
-        `The current content of the main file is attached to each message; use read_file for OTHER files or when told the attachment was omitted.`,
-        `Call edit_file / write_file ONLY when the user explicitly asks for a change. For questions, summaries, feedback or discussion, answer in chat without editing.`,
-        `For edit_file, copy old_string EXACTLY from the attached file content (or read_file output), including whitespace and line breaks — a reconstructed-from-memory old_string will not match and the edit is rejected.`,
-        `Never claim in prose that you edited or updated the file — an edit only counts if you actually call edit_file / write_file. To edit, call the tools; do not paste the whole file back into chat.`,
-      );
+    if (canRead || canWrite) {
+      const named: string[] = [];
+      if (canRead) named.push('read_file(path)', 'list_dir(path)', 'search_files(query, path)');
+      if (canWrite) named.push('write_file(path, content)', 'edit_file(path, old_string, new_string)');
+      lines.push(`You have these tools available: ${named.join(', ')}.`);
+      if (canRead) {
+        lines.push(
+          `To explore a granted folder, call list_dir(path) to enumerate its files and subfolders before reading individual files with read_file — read_file works on files only, not directories.`,
+          `search_files searches markdown under a granted path. Never ask the user to open or paste files.`,
+        );
+      }
+      if (canWrite) {
+        lines.push(
+          `When the user asks for edits to a writable file, you MUST call edit_file (for a small change) or write_file (to replace the whole file) to apply it on disk. The host reloads the editor from disk after the tools run.`,
+          `The current content of the main file is attached to each message; use read_file for OTHER files or when told the attachment was omitted.`,
+          `Call edit_file / write_file ONLY when the user explicitly asks for a change. For questions, summaries, feedback or discussion, answer in chat without editing.`,
+          `For edit_file, copy old_string EXACTLY from the attached file content (or read_file output), including whitespace and line breaks — a reconstructed-from-memory old_string will not match and the edit is rejected.`,
+          `Never claim in prose that you edited or updated the file — an edit only counts if you actually call edit_file / write_file. To edit, call the tools; do not paste the whole file back into chat.`,
+        );
+        if (!opts.workspaceWrite) {
+          lines.push(`The only writable target is the active document above; reads are limited to its folder plus any granted read paths.`);
+        }
+      } else if (canRead) {
+        lines.push(`read_file, list_dir and search_files are allowed; never ask the user to open or paste files.`);
+        lines.push(`The current content of the main file is attached to each message; use read_file for OTHER files or when told the attachment was omitted.`);
+      }
     } else {
       lines.push(
         `You have no file tools in this chat. Answer in Markdown; for diagrams reply with a \`\`\`mermaid fenced code block — the editor renders it.`,
       );
     }
-  } else {
+  } else if (canWrite) {
     lines.push(
       `When the user asks for edits to the active file, USE YOUR Edit / Write TOOLS to modify the file on disk directly. Do NOT return code fences with the proposed change — the host will reload the editor from disk after you finish.`,
     );
+  } else {
+    lines.push(`Do not use Edit, Write, or Bash on this turn. Answer in chat.`);
   }
   lines.push(
     ``,
     `For chat-only answers (questions about the file, summaries, suggestions), respond as plain text without editing the file.`,
+    `Raster images in the note (\`![alt](path)\`) are not searchable as markdown text. When the user asks about text inside a picture or diagram, Read those image files or look at attached images.`,
   );
+  if (mode === 'ask') lines.push('', ASK_MODE_INSTRUCTIONS);
+  if (mode === 'plan') lines.push('', PLAN_MODE_INSTRUCTIONS);
+  const project = clampAiInstructions(opts.projectInstructions ?? '', PROJECT_INSTRUCTIONS_MAX);
+  const custom = clampAiInstructions(opts.customInstructions ?? '', CUSTOM_INSTRUCTIONS_MAX);
+  if (custom) {
+    lines.push('', 'User instructions:', custom);
+  }
+  if (project) {
+    lines.push('', 'Project instructions:', project);
+  }
   return lines.join('\n');
 }
 
@@ -159,6 +239,10 @@ export function buildTurnContext(opts: PreambleOptions): string {
   if (opts.docTooLarge && !opts.sendFullDocOverride) {
     sections.push(`Note: the active document is large (${opts.docMarkdownLength} bytes). Focus on the first 200KB unless instructed otherwise.`);
   }
+  if (opts.docImages && opts.docImages.length > 0) {
+    const lines = opts.docImages.map(img => `- ${img.absolutePath}${img.alt ? ` (${img.alt})` : ''}`);
+    sections.push(`The active note contains these local images. Text inside them is not in the markdown.\n${lines.join('\n')}`);
+  }
   if (opts.mermaidEditMode) {
     const open = opts.mermaidWriteFormat?.open ?? '```mermaid';
     const close = opts.mermaidWriteFormat?.close ?? '```';
@@ -168,6 +252,20 @@ export function buildTurnContext(opts: PreambleOptions): string {
       'Do NOT call file Edit / Write tools — the host applies your reply to the diagram node directly.',
       'Stay terse — diagrams should not be cluttered with unnecessary nodes.',
     ].join('\n'));
+  }
+  if (opts.attachedFiles && opts.attachedFiles.length > 0) {
+    const blocks = opts.attachedFiles.map((f) => {
+      const kind = f.kind === 'folder' ? 'folder' : 'file';
+      const head = `- ${kind}: ${f.path}`;
+      if (f.kind === 'folder') {
+        return `${head}\n  Use list_dir / Read for files under this folder.`;
+      }
+      if (f.excerpt) {
+        return `${head}\n<<<\n${f.excerpt}\n>>>`;
+      }
+      return `${head}\n  Use Read / read_file on this path; it was not inlined because it is large.`;
+    });
+    sections.push(`Attached files:\n${blocks.join('\n')}`);
   }
   return sections.join('\n\n');
 }

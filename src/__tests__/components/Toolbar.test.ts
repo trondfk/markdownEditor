@@ -143,7 +143,7 @@ describe('Toolbar Component', () => {
         },
       });
 
-      const pdfButton = wrapper.find('button[data-tooltip-text="PDF"]');
+      const pdfButton = wrapper.find('button[data-tooltip-text*="PDF"]');
       await pdfButton.trigger('click');
 
       expect(wrapper.emitted('exportPdf')).toBeTruthy();

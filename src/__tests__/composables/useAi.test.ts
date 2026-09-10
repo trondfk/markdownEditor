@@ -19,6 +19,7 @@ import { useSettings, OLLAMA_DEFAULT_NUM_CTX, OLLAMA_MIN_NUM_CTX } from '../../c
 
 describe('useAi', () => {
   beforeEach(() => {
+    vi.useRealTimers();
     vi.clearAllMocks();
     lastHandler = null;
     // Reset module-scope thread store between tests.
@@ -212,5 +213,65 @@ describe('useAi', () => {
     const secondCall = (aiCommands.send as unknown as { mock: { calls: unknown[][] } }).mock.calls[1];
     const req = secondCall[0] as { history?: { role: string; content: string }[] };
     expect(req.history).toEqual([]);
+  });
+
+  it('does not treat a new empty thread as sending while another thread is in flight', async () => {
+    (aiCommands.send as unknown as { mockResolvedValue: (v: unknown) => void }).mockResolvedValue('req');
+    const { send, startNewThread, isSending, isActiveThreadSending } = useAi();
+    const promise = send({
+      cli: 'claude', sessionId: null, model: null, effort: null, prompt: 'hi', preamble: 'p', turnContext: '',
+      accessMap: { readPaths: [], writePaths: [], tools: { bash: false, network: false, fileRead: false, fileWrite: false } },
+      workDir: '/x',
+    });
+    await new Promise(r => setTimeout(r, 30));
+    startNewThread();
+    expect(isSending.value).toBe(true);
+    expect(isActiveThreadSending.value).toBe(false);
+    lastHandler!({ kind: 'done', sessionId: 's1', usage: null });
+    await promise;
+    expect(isSending.value).toBe(false);
+  });
+
+  it('unlocks isSending when Cancel gets no Error chunk', async () => {
+    vi.useFakeTimers();
+    (aiCommands.send as unknown as { mockResolvedValue: (v: unknown) => void }).mockResolvedValue('req');
+    const { send, cancel, isSending, messages } = useAi();
+    const promise = send({
+      cli: 'claude', sessionId: null, model: null, effort: null, prompt: 'hi', preamble: 'p', turnContext: '',
+      accessMap: { readPaths: [], writePaths: [], tools: { bash: false, network: false, fileRead: false, fileWrite: false } },
+      workDir: '/x',
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(lastHandler).toBeTruthy();
+    const done = cancel();
+    await vi.advanceTimersByTimeAsync(2_000);
+    await done;
+    await promise;
+    expect(isSending.value).toBe(false);
+    expect(messages.value[1].error).toBe('Cancelled');
+    vi.useRealTimers();
+  });
+
+  it('auto-cancels after three minutes of silence', async () => {
+    vi.useFakeTimers();
+    (aiCommands.send as unknown as { mockResolvedValue: (v: unknown) => void }).mockResolvedValue('req');
+    (aiCommands.cancel as unknown as { mockResolvedValue: (v: unknown) => void }).mockResolvedValue(undefined);
+    const { send, isSending, messages } = useAi();
+    const promise = send({
+      cli: 'claude', sessionId: null, model: null, effort: null, prompt: 'hi', preamble: 'p', turnContext: '',
+      accessMap: { readPaths: [], writePaths: [], tools: { bash: false, network: false, fileRead: false, fileWrite: false } },
+      workDir: '/x',
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    lastHandler!({ kind: 'text', content: 'partial' });
+    await vi.advanceTimersByTimeAsync(180_000);
+    await promise;
+    expect(isSending.value).toBe(false);
+    expect(messages.value[1].error).toMatch(/stalled/i);
+    vi.useRealTimers();
   });
 });

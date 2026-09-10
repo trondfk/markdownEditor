@@ -6,10 +6,11 @@
 //! executes via `tokio::fs`, so a tool-capable local model (e.g. qwen3.5) can
 //! actually read/write the document the same way the CLI agents do.
 //!
-//! Path safety is enforced here, server-side: writes go only to the active
-//! document, reads only inside its directory (plus any extra read roots the
-//! frontend merged into the access map). Canonicalization is the cross-OS
-//! normaliser — no shell, no platform `#[cfg]`.
+//! Path safety is enforced here, server-side: writes go to the active
+//! document, and (when the access map lists extra write roots) to markdown
+//! notes under those roots. Reads stay inside the document directory plus any
+//! extra read roots. Canonicalization is the cross-OS normaliser — no
+//! shell, no platform `#[cfg]`.
 
 use serde::{Deserialize, Serialize};
 
@@ -28,6 +29,13 @@ pub const READ_FILE_CAP_BYTES: usize = 200 * 1024;
 /// `list_dir` returns at most this many entries so a huge directory cannot blow
 /// the model's context. Listings past this are truncated with a note.
 pub const LIST_DIR_MAX_ENTRIES: usize = 500;
+
+/// `search_files` returns at most this many hit lines so a broad query cannot
+/// blow a small local-model context.
+pub const SEARCH_FILES_MAX_HITS: usize = 40;
+
+/// Snapshot rotation when a local write tool snapshots the target first.
+const WRITE_SNAPSHOT_KEEP: usize = 10;
 
 /// Local models have far smaller context windows than the CLI agents, so we
 /// seed at most this many prior turns into a request.
@@ -127,17 +135,32 @@ pub fn tool_specs(tools: &AccessMapTools) -> Vec<serde_json::Value> {
                 }
             }
         }));
+        specs.push(serde_json::json!({
+            "type": "function",
+            "function": {
+                "name": "search_files",
+                "description": "Search markdown notes under a granted path for a substring (case-insensitive). Prefer this over asking the user to open or paste files.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": { "type": "string", "description": "Substring to find in markdown files." },
+                        "path": { "type": "string", "description": "Absolute file or folder to search. Must lie under a granted read root." }
+                    },
+                    "required": ["query", "path"]
+                }
+            }
+        }));
     }
     if tools.file_write {
         specs.push(serde_json::json!({
             "type": "function",
             "function": {
                 "name": "write_file",
-                "description": "Overwrite a file with new content (whole-file replace). The only writable target is the active document.",
+                "description": "Overwrite a markdown file with new content (whole-file replace). Allowed targets are the active document and, when granted, other .md / .markdown files under a write root.",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "path": { "type": "string", "description": "Absolute path to the file to overwrite (must be the active document)." },
+                        "path": { "type": "string", "description": "Absolute path to the markdown file to overwrite." },
                         "content": { "type": "string", "description": "The complete new file contents." }
                     },
                     "required": ["path", "content"]
@@ -148,11 +171,11 @@ pub fn tool_specs(tools: &AccessMapTools) -> Vec<serde_json::Value> {
             "type": "function",
             "function": {
                 "name": "edit_file",
-                "description": "Replace an exact substring in a file. old_string must appear exactly once. Prefer this over write_file for small edits.",
+                "description": "Replace an exact substring in a markdown file. old_string must appear exactly once. Prefer this over write_file for small edits.",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "path": { "type": "string", "description": "Absolute path to the file to edit (must be the active document)." },
+                        "path": { "type": "string", "description": "Absolute path to the markdown file to edit." },
                         "old_string": { "type": "string", "description": "The exact text to replace. Must match once and only once; include surrounding context to make it unique." },
                         "new_string": { "type": "string", "description": "The replacement text." }
                     },
@@ -204,23 +227,65 @@ async fn canonicalize_target(path: &str) -> Result<std::path::PathBuf, String> {
     Ok(parent_real.join(name))
 }
 
-/// Resolve + authorise a write/edit target. Allowed only if it canonicalizes to
-/// exactly the active document. Returns the canonical doc path on success, or a
-/// tool-error string (fed back to the model) on rejection.
+fn is_markdown_note(path: &std::path::Path) -> bool {
+    let name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    name.ends_with(".md") || name.ends_with(".markdown")
+}
+
+/// Resolve + authorise a write/edit target. The first write path (the active
+/// document) is always allowed. Extra write-path roots may authorise other
+/// `.md` / `.markdown` files that canonicalize underneath them. Returns the
+/// canonical target on success, or a tool-error string (fed back to the model)
+/// on rejection.
 pub async fn resolve_writable(req: &AiSendRequest, path: &str) -> Result<std::path::PathBuf, String> {
-    let doc = doc_path(req).ok_or_else(|| {
-        "write rejected: there is no writable document for this chat (the file is unsaved).".to_string()
-    })?;
-    let doc_real = canonicalize_existing(doc).await.map_err(|_| {
-        format!("write rejected: the active document {} could not be resolved on disk.", doc)
-    })?;
+    if req.access_map.write_paths.iter().all(|p| p.is_empty()) {
+        return Err(
+            "write rejected: there is no writable document for this chat (the file is unsaved)."
+                .to_string(),
+        );
+    }
     let target = canonicalize_target(path).await?;
-    if target == doc_real {
-        Ok(doc_real)
+    if !is_markdown_note(&target) {
+        return Err(format!(
+            "write rejected: {} is not a markdown note (.md / .markdown).",
+            path
+        ));
+    }
+    let mut extra_roots = false;
+    for wp in &req.access_map.write_paths {
+        if wp.is_empty() {
+            continue;
+        }
+        let Ok(real) = canonicalize_existing(wp).await else {
+            continue;
+        };
+        let is_dir = tokio::fs::metadata(&real)
+            .await
+            .map(|m| m.is_dir())
+            .unwrap_or(false);
+        if is_dir {
+            extra_roots = true;
+            if target.starts_with(&real) {
+                return Ok(target);
+            }
+        } else if target == real {
+            return Ok(target);
+        }
+    }
+    let hint = doc_path(req).unwrap_or("the active document");
+    if extra_roots {
+        Err(format!(
+            "write rejected: {} is outside the writable markdown roots. You may write .md / .markdown files under the granted write paths, or the main file {}.",
+            path, hint
+        ))
     } else {
         Err(format!(
             "write rejected: {} is outside the only writable target {}. You may only write to the active document.",
-            path, doc
+            path, hint
         ))
     }
 }
@@ -262,6 +327,21 @@ fn str_arg<'a>(args: &'a serde_json::Value, key: &str) -> Result<&'a str, String
         .ok_or_else(|| format!("missing or non-string argument: {}", key))
 }
 
+fn snapshot_before_write(app: Option<&tauri::AppHandle>, req: &AiSendRequest, real: &std::path::Path) {
+    let Some(handle) = app else {
+        return;
+    };
+    let path = real.to_string_lossy().to_string();
+    let content = std::fs::read_to_string(real).unwrap_or_default();
+    let _ = crate::ai::snapshots::create(
+        handle,
+        &path,
+        &content,
+        req.session_id.clone(),
+        WRITE_SNAPSHOT_KEEP,
+    );
+}
+
 /// Execute one tool call, enforcing access-map gating + path safety. Returns a
 /// short human-readable result string for the tool-result message on success,
 /// or an Err(String) describing the failure — which is fed back to the model as
@@ -270,6 +350,7 @@ pub async fn run_tool(
     req: &AiSendRequest,
     name: &str,
     args: &serde_json::Value,
+    app: Option<&tauri::AppHandle>,
 ) -> Result<String, String> {
     match name {
         "read_file" => {
@@ -329,6 +410,18 @@ pub async fn run_tool(
             }
             Ok(format_dir_listing(path, entries))
         }
+        "search_files" => {
+            if !req.access_map.tools.file_read {
+                return Err("search_files is not enabled for this chat.".to_string());
+            }
+            let query = str_arg(args, "query")?;
+            let path = str_arg(args, "path")?;
+            if query.trim().is_empty() {
+                return Err("search_files: query must not be empty.".to_string());
+            }
+            let real = resolve_readable(req, path).await?;
+            Ok(search_markdown(&real, query))
+        }
         "write_file" => {
             if !req.access_map.tools.file_write {
                 return Err("write_file is not enabled for this chat.".to_string());
@@ -336,6 +429,7 @@ pub async fn run_tool(
             let path = str_arg(args, "path")?;
             let content = str_arg(args, "content")?;
             let real = resolve_writable(req, path).await?;
+            snapshot_before_write(app, req, &real);
             tokio::fs::write(&real, content.as_bytes())
                 .await
                 .map_err(|e| format!("write_file failed for {}: {}", path, e))?;
@@ -349,6 +443,7 @@ pub async fn run_tool(
             let old_string = str_arg(args, "old_string")?;
             let new_string = str_arg(args, "new_string")?;
             let real = resolve_writable(req, path).await?;
+            snapshot_before_write(app, req, &real);
             let original = tokio::fs::read_to_string(&real)
                 .await
                 .map_err(|e| format!("edit_file failed to read {}: {}", path, e))?;
@@ -359,6 +454,87 @@ pub async fn run_tool(
             Ok(format!("Edited {} (1 replacement).", path))
         }
         other => Err(format!("unknown tool: {}", other)),
+    }
+}
+
+const SEARCH_FILES_MAX_FILES: usize = 2_000;
+const SEARCH_FILES_MAX_BYTES: usize = 200 * 1024;
+
+/// Case-insensitive substring search of markdown under `root` (file or folder).
+fn search_markdown(root: &std::path::Path, query: &str) -> String {
+    let q = query.trim().to_ascii_lowercase();
+    let mut hits: Vec<String> = Vec::new();
+    let mut files_visited = 0usize;
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(cur) = stack.pop() {
+        if hits.len() >= SEARCH_FILES_MAX_HITS || files_visited >= SEARCH_FILES_MAX_FILES {
+            break;
+        }
+        let meta = match std::fs::metadata(&cur) {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        if meta.is_dir() {
+            let rd = match std::fs::read_dir(&cur) {
+                Ok(rd) => rd,
+                Err(_) => continue,
+            };
+            for entry in rd.flatten() {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                if name.starts_with('.') || name == "node_modules" {
+                    continue;
+                }
+                stack.push(entry.path());
+            }
+            continue;
+        }
+        if !meta.is_file() {
+            continue;
+        }
+        let name = cur
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        if !(name.ends_with(".md") || name.ends_with(".markdown") || name.ends_with(".mdx")) {
+            continue;
+        }
+        files_visited += 1;
+        let mut buf = vec![0u8; SEARCH_FILES_MAX_BYTES];
+        let n = match std::fs::File::open(&cur).and_then(|mut f| {
+            use std::io::Read;
+            f.read(&mut buf)
+        }) {
+            Ok(n) => n,
+            Err(_) => continue,
+        };
+        buf.truncate(n);
+        let text = String::from_utf8_lossy(&buf);
+        for (idx, line) in text.lines().enumerate() {
+            if line.to_ascii_lowercase().contains(&q) {
+                let trimmed = line.trim();
+                let snippet: String = trimmed.chars().take(240).collect();
+                hits.push(format!("{}:{}: {}", cur.to_string_lossy(), idx + 1, snippet));
+                if hits.len() >= SEARCH_FILES_MAX_HITS {
+                    break;
+                }
+            }
+        }
+    }
+    if hits.is_empty() {
+        format!("No matches for {:?} under {}.", query, root.display())
+    } else {
+        let mut out = format!(
+            "Hits for {:?} under {} ({}):\n{}",
+            query,
+            root.display(),
+            hits.len(),
+            hits.join("\n")
+        );
+        if hits.len() >= SEARCH_FILES_MAX_HITS {
+            out.push_str("\n[truncated]");
+        }
+        out
     }
 }
 
@@ -580,7 +756,7 @@ mod tests {
             .iter()
             .map(|s| s["function"]["name"].as_str().unwrap())
             .collect();
-        assert_eq!(names, vec!["read_file", "list_dir", "write_file", "edit_file"]);
+        assert_eq!(names, vec!["read_file", "list_dir", "search_files", "write_file", "edit_file"]);
         for s in &specs {
             assert_eq!(s["type"], "function");
             assert_eq!(s["function"]["parameters"]["type"], "object");
@@ -595,7 +771,7 @@ mod tests {
             .iter()
             .map(|s| s["function"]["name"].as_str().unwrap())
             .collect();
-        assert_eq!(names, vec!["read_file", "list_dir"]);
+        assert_eq!(names, vec!["read_file", "list_dir", "search_files"]);
     }
 
     #[test]
@@ -793,7 +969,7 @@ mod tests {
             "old_string": "old body",
             "new_string": "new body",
         });
-        let result = run_tool(&req, "edit_file", &args).await.unwrap();
+        let result = run_tool(&req, "edit_file", &args, None).await.unwrap();
         assert!(result.contains("1 replacement"));
         let on_disk = tokio::fs::read_to_string(&doc).await.unwrap();
         assert_eq!(on_disk, "# Title\n\nnew body\n");
@@ -814,7 +990,7 @@ mod tests {
         };
         let req = req_for(map);
         let args = serde_json::json!({ "path": doc.to_string_lossy(), "content": "x" });
-        let err = run_tool(&req, "write_file", &args).await.unwrap_err();
+        let err = run_tool(&req, "write_file", &args, None).await.unwrap_err();
         assert!(err.contains("not enabled"), "got: {}", err);
         tokio::fs::remove_dir_all(&dir).await.ok();
     }
@@ -848,7 +1024,7 @@ mod tests {
         let req = req_for(map);
 
         let args = serde_json::json!({ "path": dir.to_string_lossy() });
-        let out = run_tool(&req, "list_dir", &args).await.unwrap();
+        let out = run_tool(&req, "list_dir", &args, None).await.unwrap();
         assert!(out.contains("doc.md"), "got: {}", out);
         assert!(out.contains("note.md"), "got: {}", out);
         assert!(out.contains("sub/"), "directory not marked with /: {}", out);
@@ -873,7 +1049,7 @@ mod tests {
         let req = req_for(map);
 
         let args = serde_json::json!({ "path": outside.to_string_lossy() });
-        let err = run_tool(&req, "list_dir", &args).await.unwrap_err();
+        let err = run_tool(&req, "list_dir", &args, None).await.unwrap_err();
         assert!(err.contains("outside the readable roots"), "got: {}", err);
 
         tokio::fs::remove_dir_all(&dir).await.ok();
@@ -895,12 +1071,89 @@ mod tests {
         let req = req_for(map);
 
         let args = serde_json::json!({ "path": dir.to_string_lossy() });
-        let err = run_tool(&req, "read_file", &args).await.unwrap_err();
+        let err = run_tool(&req, "read_file", &args, None).await.unwrap_err();
         assert!(err.contains("is a directory"), "got: {}", err);
         assert!(err.contains("list_dir"), "got: {}", err);
         assert!(!err.to_lowercase().contains("os error"), "OS error leaked: {}", err);
 
         tokio::fs::remove_dir_all(&dir).await.ok();
+    }
+
+    #[tokio::test]
+    async fn resolve_writable_allows_markdown_under_extra_write_root() {
+        let dir = std::env::temp_dir().join(format!("mermark_ww_{}", uuid::Uuid::new_v4()));
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        let doc = dir.join("doc.md");
+        let sibling = dir.join("other.md");
+        tokio::fs::write(&doc, b"hello").await.unwrap();
+        tokio::fs::write(&sibling, b"sib").await.unwrap();
+
+        let map = AccessMap {
+            read_paths: vec![dir.to_string_lossy().to_string()],
+            write_paths: vec![
+                doc.to_string_lossy().to_string(),
+                dir.to_string_lossy().to_string(),
+            ],
+            tools: tools(true, true),
+        };
+        let req = req_for(map);
+        assert!(resolve_writable(&req, &sibling.to_string_lossy()).await.is_ok());
+
+        let bin = dir.join("x.bin");
+        tokio::fs::write(&bin, b"nope").await.unwrap();
+        let err = resolve_writable(&req, &bin.to_string_lossy())
+            .await
+            .unwrap_err();
+        assert!(err.contains("not a markdown note"), "got: {}", err);
+
+        tokio::fs::remove_dir_all(&dir).await.ok();
+    }
+
+    #[tokio::test]
+    async fn run_tool_search_files_finds_substring_and_rejects_outside() {
+        let dir = std::env::temp_dir().join(format!("mermark_sf_{}", uuid::Uuid::new_v4()));
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        let doc = dir.join("doc.md");
+        tokio::fs::write(&doc, b"# Title\nfindme here\n").await.unwrap();
+        tokio::fs::write(dir.join("note.md"), b"nothing").await.unwrap();
+
+        let map = AccessMap {
+            read_paths: vec![dir.to_string_lossy().to_string()],
+            write_paths: vec![doc.to_string_lossy().to_string()],
+            tools: tools(true, true),
+        };
+        let req = req_for(map);
+        let args = serde_json::json!({
+            "query": "findme",
+            "path": dir.to_string_lossy(),
+        });
+        let out = run_tool(&req, "search_files", &args, None).await.unwrap();
+        assert!(out.contains("findme"), "got: {}", out);
+        assert!(out.contains("doc.md"), "got: {}", out);
+
+        let outside = std::env::temp_dir().join(format!("mermark_sf_out_{}", uuid::Uuid::new_v4()));
+        tokio::fs::create_dir_all(&outside).await.unwrap();
+        tokio::fs::write(outside.join("x.md"), b"findme").await.unwrap();
+        let err = run_tool(
+            &req,
+            "search_files",
+            &serde_json::json!({ "query": "findme", "path": outside.to_string_lossy() }),
+            None,
+        )
+        .await
+        .unwrap_err();
+        assert!(err.contains("outside the readable roots"), "got: {}", err);
+
+        let gated = req_for(AccessMap {
+            read_paths: vec![dir.to_string_lossy().to_string()],
+            write_paths: vec![doc.to_string_lossy().to_string()],
+            tools: tools(false, true),
+        });
+        let off = run_tool(&gated, "search_files", &args, None).await.unwrap_err();
+        assert!(off.contains("not enabled"), "got: {}", off);
+
+        tokio::fs::remove_dir_all(&dir).await.ok();
+        tokio::fs::remove_dir_all(&outside).await.ok();
     }
 
     #[test]

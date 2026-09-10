@@ -1,6 +1,8 @@
 ﻿<script setup lang="ts">
 import { useToolbarActions } from '../composables/useToolbarActions';
 import { useWorkspace } from '../composables/useWorkspace';
+import { useKeybinds } from '../composables/useKeybinds';
+import { formatChord } from '../data/keybindActions';
 import { ZOOM_MIN, ZOOM_MAX } from '../composables/useEditorZoom';
 import OpenSplitButton from './OpenSplitButton.vue';
 import AiToolbarButton from './ai/AiToolbarButton.vue';
@@ -43,6 +45,7 @@ const emit = defineEmits<{
   compareTabs: [];
   showShortcuts: [];
   showSettings: [];
+  reportFeedback: [];
   toggleToc: [];
   toggleAi: [];
 }>();
@@ -92,6 +95,15 @@ const {
   t,
 } = useToolbarActions();
 
+const keybinds = useKeybinds();
+
+function tip(base: string, actionId: string): string {
+  const chord = keybinds.bindingFor(actionId);
+  const suffix = formatChord(chord, '');
+  const stripped = base.replace(/ \([^)]+\)$/, '');
+  return suffix ? `${stripped} (${suffix})` : stripped;
+}
+
 const needsEditor = (id: string) => {
   const editorItems = [
     'undo', 'redo', 'heading-select', 'bold', 'italic', 'strikethrough', 'inline-code',
@@ -131,7 +143,7 @@ const showLabel = (id: string) => {
 
 <template>
   <!-- File operations -->
-  <button v-if="itemId === 'new-file'" @click="emit('newFile')" class="toolbar-btn" :class="{ 'icon-only': !showLabel(itemId) }" v-tooltip="`${t.new} (Ctrl+N)`" :disabled="isDisabled(itemId)">
+  <button v-if="itemId === 'new-file'" @click="emit('newFile')" class="toolbar-btn" :class="{ 'icon-only': !showLabel(itemId) }" v-tooltip="tip(t.new, 'new-file')" :disabled="isDisabled(itemId)">
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
       <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/>
       <polyline points="14,2 14,8 20,8"/>
@@ -150,7 +162,7 @@ const showLabel = (id: string) => {
     />
   </div>
 
-  <button v-else-if="itemId === 'save-file'" @click="emit('saveFile')" class="toolbar-btn" :class="{ 'icon-only': !showLabel(itemId) }" v-tooltip="`${t.save} (Ctrl+S)`" :disabled="isDisabled(itemId)">
+  <button v-else-if="itemId === 'save-file'" @click="emit('saveFile')" class="toolbar-btn" :class="{ 'icon-only': !showLabel(itemId) }" v-tooltip="tip(t.save, 'save-file')" :disabled="isDisabled(itemId)">
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
       <path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/>
       <polyline points="17,21 17,13 7,13 7,21"/>
@@ -159,7 +171,7 @@ const showLabel = (id: string) => {
     <span v-if="showLabel(itemId)">{{ t.save }}</span>
   </button>
 
-  <button v-else-if="itemId === 'save-file-as'" @click="emit('saveFileAs')" class="toolbar-btn" :class="{ 'icon-only': !showLabel(itemId) }" v-tooltip="`${t.saveAs} (Ctrl+Shift+S)`" :disabled="isDisabled(itemId)">
+  <button v-else-if="itemId === 'save-file-as'" @click="emit('saveFileAs')" class="toolbar-btn" :class="{ 'icon-only': !showLabel(itemId) }" v-tooltip="tip(t.saveAs, 'save-file-as')" :disabled="isDisabled(itemId)">
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
       <path d="M17 21H7a2 2 0 01-2-2V5a2 2 0 012-2h7l5 5v11a2 2 0 01-2 2z"/>
       <polyline points="14,3 14,8 19,8"/>
@@ -169,7 +181,7 @@ const showLabel = (id: string) => {
     <span v-if="showLabel(itemId)">{{ t.saveAs }}</span>
   </button>
 
-  <button v-else-if="itemId === 'export-pdf'" @click="emit('exportPdf')" class="toolbar-btn" :class="{ 'icon-only': !showLabel(itemId) }" v-tooltip="t.exportPdf" :disabled="isDisabled(itemId)">
+  <button v-else-if="itemId === 'export-pdf'" @click="emit('exportPdf')" class="toolbar-btn" :class="{ 'icon-only': !showLabel(itemId) }" v-tooltip="tip(t.exportPdf, 'export-pdf')" :disabled="isDisabled(itemId)">
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
       <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/>
       <polyline points="14,2 14,8 20,8"/>
@@ -197,7 +209,7 @@ const showLabel = (id: string) => {
     <span v-if="showLabel(itemId)">{{ t.presentMarp }}</span>
   </button>
 
-  <button v-else-if="itemId === 'show-shortcuts'" @click="emit('showShortcuts')" class="toolbar-btn icon-only shortcuts-btn" v-tooltip="`${t.keyboardShortcuts} (Ctrl+/)`">
+  <button v-else-if="itemId === 'show-shortcuts'" @click="emit('showShortcuts')" class="toolbar-btn icon-only shortcuts-btn" v-tooltip="tip(t.keyboardShortcuts, 'show-shortcuts')">
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
       <rect x="2" y="6" width="20" height="12" rx="2"/>
       <line x1="6" y1="10" x2="6" y2="10"/>
@@ -208,15 +220,23 @@ const showLabel = (id: string) => {
     </svg>
   </button>
 
-  <button v-else-if="itemId === 'show-settings'" @click="emit('showSettings')" class="toolbar-btn icon-only settings-btn" v-tooltip="t.settings">
+  <button v-else-if="itemId === 'show-settings'" @click="emit('showSettings')" class="toolbar-btn icon-only settings-btn" v-tooltip="tip(t.settings, 'show-settings')">
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
       <circle cx="12" cy="12" r="3"/>
       <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
     </svg>
   </button>
 
+  <button v-else-if="itemId === 'report-feedback'" @click="emit('reportFeedback')" class="toolbar-btn icon-only" v-tooltip="tip(t.reportFeedback, 'report-feedback')">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="12" cy="12" r="10"/>
+      <line x1="12" y1="8" x2="12" y2="12"/>
+      <line x1="12" y1="16" x2="12.01" y2="16"/>
+    </svg>
+  </button>
+
   <!-- Undo/Redo -->
-  <button v-else-if="itemId === 'undo'" @click="runCommand(e => e.chain().focus().undo().run())" class="toolbar-btn icon-only" v-tooltip="`${t.undo} (Ctrl+Z)`" :disabled="isDisabled(itemId)">
+  <button v-else-if="itemId === 'undo'" @click="runCommand(e => e.chain().focus().undo().run())" class="toolbar-btn icon-only" v-tooltip="tip(t.undo, 'undo')" :disabled="isDisabled(itemId)">
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
       <path d="M3 10h6"/>
       <path d="M3 10l4-4"/>
@@ -225,7 +245,7 @@ const showLabel = (id: string) => {
     </svg>
   </button>
 
-  <button v-else-if="itemId === 'redo'" @click="runCommand(e => e.chain().focus().redo().run())" class="toolbar-btn icon-only" v-tooltip="`${t.redo} (Ctrl+Y)`" :disabled="isDisabled(itemId)">
+  <button v-else-if="itemId === 'redo'" @click="runCommand(e => e.chain().focus().redo().run())" class="toolbar-btn icon-only" v-tooltip="tip(t.redo, 'redo')" :disabled="isDisabled(itemId)">
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
       <path d="M21 10h-6"/>
       <path d="M21 10l-4-4"/>
@@ -255,19 +275,19 @@ const showLabel = (id: string) => {
   </div>
 
   <!-- Text formatting -->
-  <button v-else-if="itemId === 'bold'" @click="runCommand(e => e.chain().focus().toggleBold().run())" :class="{ active: isActive('bold') }" class="toolbar-btn icon-only" v-tooltip="t.boldTooltip" :disabled="isDisabled(itemId)">
+  <button v-else-if="itemId === 'bold'" @click="runCommand(e => e.chain().focus().toggleBold().run())" :class="{ active: isActive('bold') }" class="toolbar-btn icon-only" v-tooltip="tip(t.boldTooltip, 'bold')" :disabled="isDisabled(itemId)">
     <strong>{{ t.bold }}</strong>
   </button>
 
-  <button v-else-if="itemId === 'italic'" @click="runCommand(e => e.chain().focus().toggleItalic().run())" :class="{ active: isActive('italic') }" class="toolbar-btn icon-only" v-tooltip="t.italicTooltip" :disabled="isDisabled(itemId)">
+  <button v-else-if="itemId === 'italic'" @click="runCommand(e => e.chain().focus().toggleItalic().run())" :class="{ active: isActive('italic') }" class="toolbar-btn icon-only" v-tooltip="tip(t.italicTooltip, 'italic')" :disabled="isDisabled(itemId)">
     <em>{{ t.italic }}</em>
   </button>
 
-  <button v-else-if="itemId === 'strikethrough'" @click="runCommand(e => e.chain().focus().toggleStrike().run())" :class="{ active: isActive('strike') }" class="toolbar-btn icon-only" v-tooltip="t.strikethroughTooltip" :disabled="isDisabled(itemId)">
+  <button v-else-if="itemId === 'strikethrough'" @click="runCommand(e => e.chain().focus().toggleStrike().run())" :class="{ active: isActive('strike') }" class="toolbar-btn icon-only" v-tooltip="tip(t.strikethroughTooltip, 'strikethrough')" :disabled="isDisabled(itemId)">
     <s>{{ t.strikethrough }}</s>
   </button>
 
-  <button v-else-if="itemId === 'inline-code'" @click="runCommand(e => e.chain().focus().toggleCode().run())" :class="{ active: isActive('code') }" class="toolbar-btn icon-only" v-tooltip="t.inlineCodeTooltip" :disabled="isDisabled(itemId)">
+  <button v-else-if="itemId === 'inline-code'" @click="runCommand(e => e.chain().focus().toggleCode().run())" :class="{ active: isActive('code') }" class="toolbar-btn icon-only" v-tooltip="tip(t.inlineCodeTooltip, 'inline-code')" :disabled="isDisabled(itemId)">
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
       <polyline points="16,18 22,12 16,6"/>
       <polyline points="8,6 2,12 8,18"/>
@@ -279,7 +299,7 @@ const showLabel = (id: string) => {
       @click="showHighlightMenu = !showHighlightMenu"
       :class="{ active: isActive('highlight') }"
       class="toolbar-btn icon-only highlight-btn"
-      v-tooltip="t.highlightTooltip"
+      v-tooltip="tip(t.highlightTooltip, 'highlight')"
       :disabled="isDisabled(itemId)"
     >
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -306,7 +326,7 @@ const showLabel = (id: string) => {
   </div>
 
   <!-- Lists -->
-  <button v-else-if="itemId === 'bullet-list'" @click="runCommand(e => e.chain().focus().toggleBulletList().run())" :class="{ active: isActive('bulletList') }" class="toolbar-btn icon-only" v-tooltip="t.bulletList" :disabled="isDisabled(itemId)">
+  <button v-else-if="itemId === 'bullet-list'" @click="runCommand(e => e.chain().focus().toggleBulletList().run())" :class="{ active: isActive('bulletList') }" class="toolbar-btn icon-only" v-tooltip="tip(t.bulletList, 'bullet-list')" :disabled="isDisabled(itemId)">
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
       <line x1="9" y1="6" x2="20" y2="6"/>
       <line x1="9" y1="12" x2="20" y2="12"/>
@@ -317,7 +337,7 @@ const showLabel = (id: string) => {
     </svg>
   </button>
 
-  <button v-else-if="itemId === 'ordered-list'" @click="runCommand(e => e.chain().focus().toggleOrderedList().run())" :class="{ active: isActive('orderedList') }" class="toolbar-btn icon-only" v-tooltip="t.orderedList" :disabled="isDisabled(itemId)">
+  <button v-else-if="itemId === 'ordered-list'" @click="runCommand(e => e.chain().focus().toggleOrderedList().run())" :class="{ active: isActive('orderedList') }" class="toolbar-btn icon-only" v-tooltip="tip(t.orderedList, 'ordered-list')" :disabled="isDisabled(itemId)">
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
       <line x1="10" y1="6" x2="21" y2="6"/>
       <line x1="10" y1="12" x2="21" y2="12"/>
@@ -328,7 +348,7 @@ const showLabel = (id: string) => {
     </svg>
   </button>
 
-  <button v-else-if="itemId === 'task-list'" @click="runCommand(e => e.chain().focus().toggleTaskList().run())" :class="{ active: isActive('taskList') }" class="toolbar-btn icon-only" v-tooltip="t.taskList" :disabled="isDisabled(itemId)">
+  <button v-else-if="itemId === 'task-list'" @click="runCommand(e => e.chain().focus().toggleTaskList().run())" :class="{ active: isActive('taskList') }" class="toolbar-btn icon-only" v-tooltip="tip(t.taskList, 'task-list')" :disabled="isDisabled(itemId)">
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
       <rect x="3" y="5" width="6" height="6" rx="1"/>
       <path d="M5 8l1.5 1.5L9 7"/>
@@ -339,14 +359,14 @@ const showLabel = (id: string) => {
   </button>
 
   <!-- Blocks -->
-  <button v-else-if="itemId === 'blockquote'" @click="runCommand(e => e.chain().focus().toggleBlockquote().run())" :class="{ active: isActive('blockquote') }" class="toolbar-btn icon-only" v-tooltip="t.blockquote" :disabled="isDisabled(itemId)">
+  <button v-else-if="itemId === 'blockquote'" @click="runCommand(e => e.chain().focus().toggleBlockquote().run())" :class="{ active: isActive('blockquote') }" class="toolbar-btn icon-only" v-tooltip="tip(t.blockquote, 'blockquote')" :disabled="isDisabled(itemId)">
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
       <path d="M10 11l-4 4V7a2 2 0 012-2h2"/>
       <path d="M20 11l-4 4V7a2 2 0 012-2h2"/>
     </svg>
   </button>
 
-  <button v-else-if="itemId === 'code-block'" @click="runCommand(e => e.chain().focus().toggleCodeBlock().run())" :class="{ active: isActive('codeBlock') }" class="toolbar-btn icon-only" v-tooltip="t.codeBlock" :disabled="isDisabled(itemId)">
+  <button v-else-if="itemId === 'code-block'" @click="runCommand(e => e.chain().focus().toggleCodeBlock().run())" :class="{ active: isActive('codeBlock') }" class="toolbar-btn icon-only" v-tooltip="tip(t.codeBlock, 'code-block')" :disabled="isDisabled(itemId)">
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
       <rect x="3" y="3" width="18" height="18" rx="2"/>
       <polyline points="9,9 6,12 9,15"/>
@@ -354,14 +374,14 @@ const showLabel = (id: string) => {
     </svg>
   </button>
 
-  <button v-else-if="itemId === 'horizontal-rule'" @click="runCommand(e => e.chain().focus().setHorizontalRule().run())" class="toolbar-btn icon-only" v-tooltip="t.horizontalRule" :disabled="isDisabled(itemId)">
+  <button v-else-if="itemId === 'horizontal-rule'" @click="runCommand(e => e.chain().focus().setHorizontalRule().run())" class="toolbar-btn icon-only" v-tooltip="tip(t.horizontalRule, 'horizontal-rule')" :disabled="isDisabled(itemId)">
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
       <line x1="3" y1="12" x2="21" y2="12"/>
     </svg>
   </button>
 
   <!-- Page break — forces a new page in PDF export -->
-  <button v-else-if="itemId === 'page-break'" @click="runCommand(e => e.chain().focus().insertContent({ type: 'pageBreak' }).run())" class="toolbar-btn icon-only" v-tooltip="t.pageBreak" :disabled="isDisabled(itemId)">
+  <button v-else-if="itemId === 'page-break'" @click="runCommand(e => e.chain().focus().insertContent({ type: 'pageBreak' }).run())" class="toolbar-btn icon-only" v-tooltip="tip(t.pageBreak, 'page-break')" :disabled="isDisabled(itemId)">
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
       <line x1="3" y1="4" x2="21" y2="4"/>
       <line x1="3" y1="20" x2="21" y2="20"/>
@@ -372,7 +392,7 @@ const showLabel = (id: string) => {
   </button>
 
   <!-- Link -->
-  <button v-else-if="itemId === 'link'" @click="setLink" :class="{ active: isActive('customLink') }" class="toolbar-btn icon-only" v-tooltip="t.link" :disabled="isDisabled(itemId)">
+  <button v-else-if="itemId === 'link'" @click="setLink" :class="{ active: isActive('customLink') }" class="toolbar-btn icon-only" v-tooltip="tip(t.link, 'link')" :disabled="isDisabled(itemId)">
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
       <path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/>
       <path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/>
@@ -381,7 +401,7 @@ const showLabel = (id: string) => {
 
   <!-- Image (with dropdown) -->
   <div v-else-if="itemId === 'image'" class="dropdown-container">
-    <button @click="showImageMenu = !showImageMenu" class="toolbar-btn icon-only" v-tooltip="t.image" :disabled="isDisabled(itemId)">
+    <button @click="showImageMenu = !showImageMenu" class="toolbar-btn icon-only" v-tooltip="tip(t.image, 'image')" :disabled="isDisabled(itemId)">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
         <rect x="3" y="3" width="18" height="18" rx="2"/>
         <circle cx="8.5" cy="8.5" r="1.5"/>
@@ -408,7 +428,7 @@ const showLabel = (id: string) => {
 
   <!-- Table (with dropdown) -->
   <div v-else-if="itemId === 'table'" class="toolbar-group dropdown-container">
-    <button @click="showTableMenu = !showTableMenu" :class="{ active: isActive('table') }" class="toolbar-btn icon-only" v-tooltip="t.table" :disabled="isDisabled(itemId)">
+    <button @click="showTableMenu = !showTableMenu" :class="{ active: isActive('table') }" class="toolbar-btn icon-only" v-tooltip="tip(t.table, 'table')" :disabled="isDisabled(itemId)">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
         <rect x="3" y="3" width="18" height="18" rx="2"/>
         <line x1="3" y1="9" x2="21" y2="9"/>
@@ -439,12 +459,12 @@ const showLabel = (id: string) => {
   </div>
 
   <!-- Mermaid -->
-  <button v-else-if="itemId === 'math-inline' || itemId === 'math-block'" @mousedown.prevent @click="insertMath(itemId === 'math-block')" class="toolbar-btn" :aria-label="itemId === 'math-block' ? t.mathBlock : t.mathInline" v-tooltip="itemId === 'math-block' ? t.mathBlock : t.mathInline" :disabled="isDisabled(itemId)">
+  <button v-else-if="itemId === 'math-inline' || itemId === 'math-block'" @mousedown.prevent @click="insertMath(itemId === 'math-block')" class="toolbar-btn" :aria-label="itemId === 'math-block' ? t.mathBlock : t.mathInline" v-tooltip="tip(itemId === 'math-block' ? t.mathBlock : t.mathInline, itemId)" :disabled="isDisabled(itemId)">
     <span aria-hidden="true">{{ itemId === 'math-block' ? '∑' : '𝑥²' }}</span>
   </button>
 
   <!-- Mermaid -->
-  <button v-else-if="itemId === 'mermaid'" @click="insertMermaid" class="toolbar-btn mermaid-btn" :class="{ 'icon-only': !showLabel(itemId) }" v-tooltip="t.insertMermaid" :disabled="isDisabled(itemId)">
+  <button v-else-if="itemId === 'mermaid'" @click="insertMermaid" class="toolbar-btn mermaid-btn" :class="{ 'icon-only': !showLabel(itemId) }" v-tooltip="tip(t.insertMermaid, 'mermaid')" :disabled="isDisabled(itemId)">
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
       <rect x="3" y="3" width="6" height="6" rx="1"/>
       <rect x="15" y="3" width="6" height="6" rx="1"/>
@@ -456,7 +476,7 @@ const showLabel = (id: string) => {
   </button>
 
   <!-- Footnote -->
-  <button v-else-if="itemId === 'footnote'" @mousedown.prevent @click="insertFootnote" class="toolbar-btn footnote-btn" :class="{ 'icon-only': !showLabel(itemId) }" v-tooltip="t.insertFootnote" :disabled="isDisabled(itemId)">
+  <button v-else-if="itemId === 'footnote'" @mousedown.prevent @click="insertFootnote" class="toolbar-btn footnote-btn" :class="{ 'icon-only': !showLabel(itemId) }" v-tooltip="tip(t.insertFootnote, 'footnote')" :disabled="isDisabled(itemId)">
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
       <path d="M4 19h16"/>
       <text x="7" y="15" font-size="14" font-weight="bold" fill="currentColor" stroke="none" font-family="serif">f</text>
@@ -508,7 +528,7 @@ const showLabel = (id: string) => {
        Compact mode == status bar; the horizontal slider feels native there
        and gives drag-to-set instead of click-stepping. -->
   <div v-else-if="itemId === 'zoom-controls' && props.compact" class="toolbar-group zoom-slider-group">
-    <button @click="zoomOut" class="zoom-slider-btn" v-tooltip="t.zoomOut" aria-label="zoom out">−</button>
+    <button @click="zoomOut" class="zoom-slider-btn" v-tooltip="tip(t.zoomOut, 'zoom-out')" aria-label="zoom out">−</button>
     <input
       type="range"
       class="zoom-slider"
@@ -520,22 +540,22 @@ const showLabel = (id: string) => {
       v-tooltip="`${t.zoom} ${zoomPercent}%`"
       @input="(e: Event) => setZoom(Number((e.target as HTMLInputElement).value))"
     />
-    <button @click="zoomIn" class="zoom-slider-btn" v-tooltip="t.zoomIn" aria-label="zoom in">+</button>
-    <button @click="resetZoom" class="zoom-slider-pct" v-tooltip="t.reset">{{ zoomPercent }}%</button>
+    <button @click="zoomIn" class="zoom-slider-btn" v-tooltip="tip(t.zoomIn, 'zoom-in')" aria-label="zoom in">+</button>
+    <button @click="resetZoom" class="zoom-slider-pct" v-tooltip="tip(t.reset, 'zoom-reset')">{{ zoomPercent }}%</button>
   </div>
 
   <div v-else-if="itemId === 'zoom-controls'" class="toolbar-group zoom-group">
-    <button @click="zoomOut" class="toolbar-btn icon-only" v-tooltip="t.zoomOut">
+    <button @click="zoomOut" class="toolbar-btn icon-only" v-tooltip="tip(t.zoomOut, 'zoom-out')">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
         <circle cx="11" cy="11" r="8"/>
         <line x1="21" y1="21" x2="16.65" y2="16.65"/>
         <line x1="8" y1="11" x2="14" y2="11"/>
       </svg>
     </button>
-    <button @click="resetZoom" class="toolbar-btn zoom-percent-btn" v-tooltip="t.reset">
+    <button @click="resetZoom" class="toolbar-btn zoom-percent-btn" v-tooltip="tip(t.reset, 'zoom-reset')">
       {{ zoomPercent }}%
     </button>
-    <button @click="zoomIn" class="toolbar-btn icon-only" v-tooltip="t.zoomIn">
+    <button @click="zoomIn" class="toolbar-btn icon-only" v-tooltip="tip(t.zoomIn, 'zoom-in')">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
         <circle cx="11" cy="11" r="8"/>
         <line x1="21" y1="21" x2="16.65" y2="16.65"/>
@@ -546,7 +566,7 @@ const showLabel = (id: string) => {
   </div>
 
   <!-- View toggles -->
-  <button v-else-if="itemId === 'toggle-toc'" @click="emit('toggleToc')" :class="['toolbar-btn', 'toc-toggle-btn', { active: tocActive, 'icon-only': !showLabel(itemId) }]" v-tooltip="t.tocTooltip" :disabled="isDisabled(itemId)">
+  <button v-else-if="itemId === 'toggle-toc'" @click="emit('toggleToc')" :class="['toolbar-btn', 'toc-toggle-btn', { active: tocActive, 'icon-only': !showLabel(itemId) }]" v-tooltip="tip(t.tocTooltip, 'toggle-toc')" :disabled="isDisabled(itemId)">
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
       <line x1="3" y1="6" x2="3" y2="6"/>
       <line x1="7" y1="6" x2="21" y2="6"/>
@@ -561,7 +581,7 @@ const showLabel = (id: string) => {
     <span v-if="showLabel(itemId)">{{ t.tableOfContents }}</span>
   </button>
 
-  <button v-else-if="itemId === 'toggle-code-view'" @click="emit('toggleCodeView')" :class="['toolbar-btn', 'code-toggle-btn', { active: codeView, 'icon-only': !showLabel(itemId) }]" v-tooltip="codeView ? t.visualView : t.codeView">
+  <button v-else-if="itemId === 'toggle-code-view'" @click="emit('toggleCodeView')" :class="['toolbar-btn', 'code-toggle-btn', { active: codeView, 'icon-only': !showLabel(itemId) }]" v-tooltip="tip(codeView ? t.visualView : t.codeView, 'toggle-code-view')">
     <svg v-if="!codeView" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
       <polyline points="16,18 22,12 16,6"/>
       <polyline points="8,6 2,12 8,18"/>
@@ -593,7 +613,7 @@ const showLabel = (id: string) => {
     <span v-if="showLabel(itemId)">{{ t.splitEditor }}</span>
   </button>
 
-  <button v-else-if="itemId === 'toggle-diff'" @click="emit('toggleDiffPreview')" :class="['toolbar-btn', 'changes-toggle-btn', { active: diffActive, 'icon-only': !showLabel(itemId) }]" v-tooltip="t.changes" :disabled="isDisabled(itemId)">
+  <button v-else-if="itemId === 'toggle-diff'" @click="emit('toggleDiffPreview')" :class="['toolbar-btn', 'changes-toggle-btn', { active: diffActive, 'icon-only': !showLabel(itemId) }]" v-tooltip="tip(t.changes, 'toggle-diff')" :disabled="isDisabled(itemId)">
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
       <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/>
       <polyline points="14,2 14,8 20,8"/>
@@ -603,7 +623,7 @@ const showLabel = (id: string) => {
     <span v-if="showLabel(itemId)">{{ t.changes }}</span>
   </button>
 
-  <button v-else-if="itemId === 'compare-tabs'" @click="emit('compareTabs')" :class="['toolbar-btn', 'compare-tabs-btn', { 'icon-only': !showLabel(itemId) }]" v-tooltip="t.compareTabsTooltip" :disabled="isDisabled(itemId)">
+  <button v-else-if="itemId === 'compare-tabs'" @click="emit('compareTabs')" :class="['toolbar-btn', 'compare-tabs-btn', { 'icon-only': !showLabel(itemId) }]" v-tooltip="tip(t.compareTabsTooltip, 'compare-tabs')" :disabled="isDisabled(itemId)">
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
       <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h4"/>
       <polyline points="14,2 14,8 20,8"/>
