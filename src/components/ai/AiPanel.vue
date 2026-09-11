@@ -22,6 +22,8 @@ import { buildMermaidBlockFor } from '../../utils/mermaid-formats';
 import { resolveMermaidWriteFormat, resolveMermaidReadFormats } from '../../composables/useSettings';
 import { capDocImages, extractLocalImageRefs, isWithinImageBudget, MAX_DOC_IMAGES_PER_TURN } from '../../utils/ai-doc-images';
 import { classifyAiTool, extractToolFilePath } from '../../utils/ai-tool-kind';
+import { diffFromToolArgs, preferFileDiff, type ChangeDiff } from '../../utils/ai-change-diff';
+import { generateDiff } from '../../composables/useDiffPreview';
 import { ATTACHED_EXCERPT_MAX, flattenMentions, type MentionItem } from '../../utils/ai-mentions';
 import { workspaceFs } from '../../services/workspaceFs';
 import AiPanelTab from './AiPanelTab.vue';
@@ -332,14 +334,9 @@ function onDividerResize(clientX: number) {
   layout.resizeFromPointer(clientX, row.getBoundingClientRect());
 }
 
-const availableClis = computed<CliKind[]>(() => {
-  const out: CliKind[] = [];
-  if (health.cache.value.claude?.ok) out.push('claude');
-  if (health.cache.value.codex?.ok) out.push('codex');
-  if (health.cache.value.ollama?.ok) out.push('ollama');
-  if (health.cache.value.openai?.ok) out.push('openai');
-  return out.length > 0 ? out : (['claude', 'codex', 'ollama', 'openai'] as CliKind[]);
-});
+// Always list every provider. Health lives on the status dot; hiding a CLI
+// just because the binary check failed also hid the settings needed to fix it.
+const availableClis: CliKind[] = ['claude', 'codex', 'ollama', 'openai'];
 
 const modelOptions = computed(() => modelsFor(selectedCli.value));
 const effortOptions = computed(() => effortsFor(selectedCli.value));
@@ -620,6 +617,24 @@ async function onSend() {
   await maybeCompact();
 }
 
+const showCarryOutPlan = computed(() => {
+  if (settings.value.ai.assistantMode !== 'plan') return false;
+  if (ai.isActiveThreadSending.value) return false;
+  const msgs = ai.messages.value;
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    const m = msgs[i];
+    if (m.role === 'assistant' && m.done && m.text.trim()) return true;
+    if (m.role === 'user') break;
+  }
+  return false;
+});
+
+async function onCarryOutPlan() {
+  setAiAssistantMode('agent');
+  inputValue.value = t.value.aiCarryOutPlanPrompt;
+  await onSend();
+}
+
 /**
  * Fold the conversation into a summary once the window is nearly full, so the
  * next turn has room instead of the user being told to start over. Runs after
@@ -666,6 +681,60 @@ async function maybeCompact() {
 
 async function onCancel() { await ai.cancel(); }
 
+const changeDiffs = ref<Record<number, ChangeDiff>>({});
+
+async function snapshotVsCurrent(path: string): Promise<{ orig: string; current: string } | null> {
+  const items = await aiCommands.snapshotList(path);
+  if (items.length === 0) return null;
+  const latest = [...items].sort((a, b) => b.ts.localeCompare(a.ts))[0];
+  const orig = await aiCommands.snapshotRestore(path, latest.id);
+  let current = docMarkdown.value;
+  if (!sameAiPath(path, props.docPath)) {
+    const { readTextFile } = await import('@tauri-apps/plugin-fs');
+    current = await readTextFile(path);
+  }
+  return { orig, current };
+}
+
+async function fillChangeDiffs(tryDisk: boolean) {
+  const msgs = ai.messages.value;
+  const next: Record<number, ChangeDiff> = { ...changeDiffs.value };
+  let changed = false;
+  for (let i = 0; i < msgs.length; i++) {
+    const m = msgs[i];
+    if (m.role !== 'tool' || classifyAiTool(m.tool) !== 'edit') continue;
+    const fromArgs = diffFromToolArgs(m.text);
+    if (fromArgs && !next[i]) {
+      next[i] = fromArgs;
+      changed = true;
+    }
+    if (!tryDisk) continue;
+    const path = extractToolFilePath(m.text) ?? props.docPath;
+    if (!path) continue;
+    try {
+      const pair = await snapshotVsCurrent(path);
+      const fromFile = pair ? generateDiff(pair.orig, pair.current) : null;
+      const chosen = preferFileDiff(fromFile, fromArgs ?? next[i] ?? null);
+      if (chosen && chosen !== next[i]) {
+        next[i] = chosen;
+        changed = true;
+      }
+    } catch (e) {
+      console.warn('[AiPanel] inline change diff failed:', e);
+    }
+  }
+  if (changed) changeDiffs.value = next;
+}
+
+watch(
+  () => [ai.messages.value.length, ai.isActiveThreadSending.value, ai.activeThread.value?.id ?? ''] as const,
+  async ([, sending, threadId], prev) => {
+    if (prev && prev[2] !== threadId) changeDiffs.value = {};
+    await fillChangeDiffs(sending === false);
+  },
+  { immediate: true },
+);
+
 function onKeepChange(index: number) {
   ai.setChangeStatus(index, 'kept');
 }
@@ -682,16 +751,9 @@ async function onShowChangeDiff(index: number) {
   const path = extractToolFilePath(msg?.text ?? '') ?? props.docPath;
   if (!path) return;
   try {
-    const items = await aiCommands.snapshotList(path);
-    if (items.length === 0) return;
-    const latest = [...items].sort((a, b) => b.ts.localeCompare(a.ts))[0];
-    const orig = await aiCommands.snapshotRestore(path, latest.id);
-    let current = docMarkdown.value;
-    if (!sameAiPath(path, props.docPath)) {
-      const { readTextFile } = await import('@tauri-apps/plugin-fs');
-      current = await readTextFile(path);
-    }
-    emit('showDiff', orig, current);
+    const pair = await snapshotVsCurrent(path);
+    if (!pair) return;
+    emit('showDiff', pair.orig, pair.current);
   } catch (e) {
     console.error('[AiPanel] show change diff failed:', e);
   }
@@ -875,6 +937,8 @@ function onPreviewImage(img: PendingImage) {
       :last-tool-name="ai.lastToolName.value"
       :is-stalled="ai.isStalled.value"
       :active-doc-path="props.docPath"
+      :show-carry-out-plan="showCarryOutPlan"
+      :change-diffs="changeDiffs"
       @link-click="(url) => emit('linkClick', url)"
       @show-attachment="(p) => pins.openAttachment(p)"
       @keep-change="onKeepChange"
@@ -882,6 +946,7 @@ function onPreviewImage(img: PendingImage) {
       @show-change-diff="onShowChangeDiff"
       @cancel="onCancel"
       @report-feedback="emit('reportFeedback')"
+      @carry-out-plan="onCarryOutPlan"
     />
 
     <AiPanelComposer

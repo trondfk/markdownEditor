@@ -164,6 +164,23 @@ describe('useSettings', () => {
 
       setEditorLineHeight(1.6);
     });
+
+    it('clamps interface size and writes zoom on the document', () => {
+      const { settings, setUiScale } = useSettings();
+      setUiScale(125);
+      expect(settings.value.uiScale).toBe(125);
+      expect(document.documentElement.style.getPropertyValue('--ui-scale')).toBe('1.25');
+
+      setUiScale(40);
+      expect(settings.value.uiScale).toBe(75);
+      setUiScale(400);
+      expect(settings.value.uiScale).toBe(200);
+      setUiScale(117);
+      expect(settings.value.uiScale).toBe(115);
+      setUiScale(Number.NaN);
+      expect(settings.value.uiScale).toBe(100);
+      expect(document.documentElement.style.getPropertyValue('--ui-scale')).toBe('1');
+    });
   });
 
   describe('expand tabs setting', () => {

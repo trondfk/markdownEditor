@@ -224,6 +224,8 @@ export interface Translations {
   on: string;
   off: string;
   language: string;
+  uiScale: string;
+  uiScaleHelper: string;
 
   // Update dialog
   updateAvailable: string;
@@ -461,6 +463,7 @@ export interface Translations {
   aiSnapshotDeleteTooltip: string;
   aiRemove: string;
   aiThinking: string;
+  aiWebSearchActivity: string;
   aiAccessAllowedToolsTitle: string;
   aiAccessAllowedToolsDesc: string;
   aiAccessReadableFiles: string;
@@ -481,6 +484,7 @@ export interface Translations {
   aiChangeKept: string;
   aiChangeUndone: string;
   aiChangeShowDiff: string;
+  aiChangeHiddenLines: (n: number) => string;
   aiComposerSettings: string;
   aiLocalNoVision: string;
   aiCustomInstructions: string;
@@ -491,6 +495,8 @@ export interface Translations {
   aiModeAsk: string;
   aiModeAgent: string;
   aiModePlan: string;
+  aiCarryOutPlan: string;
+  aiCarryOutPlanPrompt: string;
   aiMentionPickFile: string;
   aiMentionEmpty: string;
   aiAttachedFiles: string;

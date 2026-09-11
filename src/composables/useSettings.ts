@@ -184,6 +184,8 @@ export interface AppSettings {
    *  Functions as a soft outer gutter — content max-width is enforced by the
    *  Minimal theme's reading measure independently. */
   editorPaddingX: number;
+  /** Whole-window UI scale in percent (75–200). Status-bar zoom is extra. */
+  uiScale: number;
   /** @deprecated kept for migration from older builds — use mermaidWriteFormatId. */
   mermaidFenceOpen?: string;
   /** @deprecated kept for migration from older builds — use mermaidWriteFormatId. */
@@ -210,6 +212,18 @@ export const EDITOR_PAD_X_MAX = 160;
 export const EDITOR_PAD_TOP_DEFAULT = 32;
 export const EDITOR_PAD_BOTTOM_DEFAULT = 48;
 export const EDITOR_PAD_X_DEFAULT = 80;
+
+export const UI_SCALE_MIN = 75;
+export const UI_SCALE_MAX = 200;
+export const UI_SCALE_STEP = 5;
+export const UI_SCALE_DEFAULT = 100;
+
+/** Snap an interface-size percent into the allowed range. */
+export function clampUiScale(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return UI_SCALE_DEFAULT;
+  const snapped = Math.round(value / UI_SCALE_STEP) * UI_SCALE_STEP;
+  return Math.max(UI_SCALE_MIN, Math.min(UI_SCALE_MAX, snapped));
+}
 
 /** Factory padding from before the looser page margins. */
 const LEGACY_EDITOR_PAD_TOP = 16;
@@ -411,6 +425,7 @@ function loadSettings(): AppSettings {
         merged.enabledReadFormatIds = BUILTIN_MERMAID_FORMATS.map((f) => f.id);
       }
       migrateEditorPadding(merged);
+      merged.uiScale = clampUiScale(merged.uiScale);
       return merged;
     }
   } catch (error) {
@@ -438,6 +453,7 @@ function getDefaultSettings(): AppSettings {
     editorPaddingTop: EDITOR_PAD_TOP_DEFAULT,
     editorPaddingBottom: EDITOR_PAD_BOTTOM_DEFAULT,
     editorPaddingX: EDITOR_PAD_X_DEFAULT,
+    uiScale: UI_SCALE_DEFAULT,
     mermaidFenceOpen: DEFAULT_MERMAID_DELIMITERS.open,
     mermaidFenceClose: DEFAULT_MERMAID_DELIMITERS.close,
     mermaidWriteFormatId: STANDARD_FORMAT_ID,
@@ -673,6 +689,11 @@ export function useSettings() {
     settings.value.editorPaddingX = Math.max(EDITOR_PAD_X_MIN, Math.min(EDITOR_PAD_X_MAX, Math.round(v)));
     applyCssVars(settings.value);
   };
+
+  const setUiScale = (v: number) => {
+    settings.value.uiScale = clampUiScale(v);
+    applyCssVars(settings.value);
+  };
   const setMermaidWriteFormatId = (id: string) => {
     const all = listAllMermaidFormats(settings.value);
     if (all.some((f) => f.id === id)) {
@@ -803,6 +824,7 @@ export function useSettings() {
     setEditorPaddingTop,
     setEditorPaddingBottom,
     setEditorPaddingX,
+    setUiScale,
     setMermaidFenceOpen,
     setMermaidFenceClose,
     setMermaidWriteFormatId,
@@ -917,6 +939,9 @@ function applyCssVars(s: AppSettings) {
   root.setProperty('--editor-pad-top', `${s.editorPaddingTop ?? EDITOR_PAD_TOP_DEFAULT}px`);
   root.setProperty('--editor-pad-bottom', `${s.editorPaddingBottom ?? EDITOR_PAD_BOTTOM_DEFAULT}px`);
   root.setProperty('--editor-pad-x', `${s.editorPaddingX ?? EDITOR_PAD_X_DEFAULT}px`);
+  const uiScale = clampUiScale(s.uiScale) / 100;
+  root.setProperty('--ui-scale', String(uiScale));
+  root.setProperty('zoom', String(uiScale));
   applyCodeThemeVars(root, s.codeTheme);
 }
 

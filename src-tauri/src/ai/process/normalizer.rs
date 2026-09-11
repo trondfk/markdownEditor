@@ -197,14 +197,95 @@ fn parse_stream_event(state: &mut ClaudeParserState, ev: &serde_json::Value) -> 
     }
 }
 
+/// Codex sometimes sends function_call.arguments as a JSON object, sometimes
+/// as a string (JSON or a raw apply_patch blob). Unwrap so the chat card can
+/// read path/old_string/patch without a second parse on the frontend.
+fn decode_tool_args(raw: &serde_json::Value) -> serde_json::Value {
+    match raw {
+        serde_json::Value::String(s) => {
+            serde_json::from_str(s).unwrap_or_else(|_| serde_json::json!({ "input": s }))
+        }
+        other => other.clone(),
+    }
+}
+
+fn first_change_path(changes: &serde_json::Value) -> Option<String> {
+    if let Some(arr) = changes.as_array() {
+        for c in arr {
+            if let Some(p) = c.get("path").and_then(|p| p.as_str()).filter(|s| !s.is_empty()) {
+                return Some(p.to_string());
+            }
+        }
+    }
+    if let Some(obj) = changes.as_object() {
+        for (k, _) in obj {
+            if k.contains('.') || k.contains('/') || k.contains('\\') {
+                return Some(k.clone());
+            }
+        }
+    }
+    None
+}
+
+fn first_change_diff(changes: &serde_json::Value) -> Option<serde_json::Value> {
+    if let Some(arr) = changes.as_array() {
+        for c in arr {
+            if let Some(d) = c.get("diff").or_else(|| c.get("patch")).cloned() {
+                return Some(d);
+            }
+        }
+    }
+    if let Some(obj) = changes.as_object() {
+        for v in obj.values() {
+            if let Some(d) = v.get("diff").or_else(|| v.get("patch")).cloned() {
+                return Some(d);
+            }
+            if v.is_string() {
+                return Some(v.clone());
+            }
+        }
+    }
+    None
+}
+
+fn file_change_args(item: &serde_json::Value) -> serde_json::Value {
+    let mut map = serde_json::Map::new();
+    if let Some(p) = item.get("path").and_then(|p| p.as_str()).filter(|s| !s.is_empty()) {
+        map.insert("path".into(), serde_json::Value::String(p.to_string()));
+    }
+    if let Some(d) = item
+        .get("diff")
+        .or_else(|| item.get("patch"))
+        .or_else(|| item.get("input"))
+        .cloned()
+    {
+        map.insert("patch".into(), d);
+    }
+    if let Some(changes) = item.get("changes").cloned() {
+        if !map.contains_key("path") {
+            if let Some(p) = first_change_path(&changes) {
+                map.insert("path".into(), serde_json::Value::String(p));
+            }
+        }
+        if !map.contains_key("patch") {
+            if let Some(d) = first_change_diff(&changes) {
+                map.insert("patch".into(), d);
+            }
+        }
+        map.insert("changes".into(), changes);
+    }
+    serde_json::Value::Object(map)
+}
+
 /// Codex --json envelope (verified against codex-cli 0.128.0):
 ///   - `thread.started`   { thread_id }            → cache thread_id
 ///   - `turn.started`                              → drop
 ///   - `item.started`     { item }                 → drop
-///   - `item.updated`     { item }                 → drop (no text deltas yet)
+///   - `item.updated`     { item: reasoning }      → Thinking (stall timer)
+///   - `item.updated`     { other item }           → drop (text still arrives on completed)
 ///   - `item.completed`   { item: agent_message } → Text (full message)
 ///   - `item.completed`   { item: function_call } → ToolRequest
-///   - `item.completed`   { item: reasoning }      → drop
+///   - `item.completed`   { item: reasoning }      → Thinking
 ///   - `turn.completed`   { usage }                → Done (with cached thread_id)
 fn parse_codex_stateful(
     state: &mut CodexParserState,
@@ -217,6 +298,19 @@ fn parse_codex_stateful(
                 state.thread_id = Some(tid.to_string());
             }
             None
+        }
+        // High-effort Codex turns spend a long time in `reasoning` before any
+        // visible text. Emit Thinking so the stall watchdog does not cancel a
+        // live generate, matching the Ollama Qwen3 path. The summary itself
+        // stays out of the chat: notes and reports should see "Tenker", not
+        // a chain-of-thought dump.
+        "item.started" | "item.updated" => {
+            let item = v.get("item")?;
+            if item.get("type").and_then(|t| t.as_str()) == Some("reasoning") {
+                Some(AiResponseChunk::Thinking)
+            } else {
+                None
+            }
         }
         "item.completed" => {
             let item = v.get("item")?;
@@ -241,11 +335,12 @@ fn parse_codex_stateful(
                         .and_then(|n| n.as_str())
                         .unwrap_or("exec")
                         .to_string();
-                    let args = item
+                    let raw_args = item
                         .get("arguments")
                         .or_else(|| item.get("args"))
                         .cloned()
-                        .unwrap_or(serde_json::json!({}));
+                        .unwrap_or_else(|| serde_json::json!({}));
+                    let args = decode_tool_args(&raw_args);
                     Some(AiResponseChunk::ToolRequest { tool, args, request_id })
                 }
                 // PowerShell / bash / arbitrary shell invocations.
@@ -282,15 +377,16 @@ fn parse_codex_stateful(
                 }
                 // Codex announces apply_patch as a function_call already; if
                 // future versions surface it as its own item.type, treat it
-                // as an Edit tool here.
+                // as an Edit tool here. Keep path + patch so the chat card
+                // can render an inline diff, not just a filename.
                 "apply_patch" | "file_change" => {
-                    let path = item.get("path").and_then(|p| p.as_str()).unwrap_or("").to_string();
                     Some(AiResponseChunk::ToolRequest {
                         tool: "Edit".into(),
-                        args: serde_json::json!({ "path": path }),
+                        args: file_change_args(item),
                         request_id,
                     })
                 }
+                "reasoning" => Some(AiResponseChunk::Thinking),
                 _ => None,
             }
         }
@@ -761,6 +857,36 @@ mod tests {
     }
 
     #[test]
+    fn codex_function_call_string_arguments_become_input() {
+        let mut state = CodexParserState::default();
+        let line = r#"{"type":"item.completed","item":{"id":"p1","type":"function_call","name":"apply_patch","arguments":"*** Begin Patch\n*** Update File: notes.md\n@@\n-a\n+b\n*** End Patch"}}"#;
+        match parse_line_codex(&mut state, line).unwrap() {
+            AiResponseChunk::ToolRequest { tool, args, .. } => {
+                assert_eq!(tool, "apply_patch");
+                let input = args.get("input").and_then(|v| v.as_str()).unwrap_or("");
+                assert!(input.contains("Update File: notes.md"));
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn codex_file_change_keeps_path_and_patch() {
+        let mut state = CodexParserState::default();
+        let line = r#"{"type":"item.completed","item":{"id":"c1","type":"file_change","changes":[{"path":"notes.md","kind":"update","diff":"@@\n-hello\n+hei\n"}]}}"#;
+        match parse_line_codex(&mut state, line).unwrap() {
+            AiResponseChunk::ToolRequest { tool, args, request_id } => {
+                assert_eq!(tool, "Edit");
+                assert_eq!(request_id, "c1");
+                assert_eq!(args.get("path").and_then(|v| v.as_str()), Some("notes.md"));
+                let patch = args.get("patch").and_then(|v| v.as_str()).unwrap_or("");
+                assert!(patch.contains("+hei"));
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
     fn claude_tool_use_buffers_input_json_delta_and_emits_on_stop() {
         let mut state = ClaudeParserState::default();
         // Tool starts at index 1 with name "Read" and id "tool-1".
@@ -825,6 +951,23 @@ mod tests {
         let mut state = CodexParserState::default();
         assert!(parse_line_codex(&mut state, r#"{"type":"turn.started"}"#).is_none());
         assert!(parse_line_codex(&mut state, r#"{"type":"item.started","item":{"type":"agent_message"}}"#).is_none());
+    }
+
+    #[test]
+    fn codex_reasoning_emits_thinking_without_text() {
+        let mut state = CodexParserState::default();
+        match parse_line_codex(&mut state, r#"{"type":"item.started","item":{"type":"reasoning"}}"#).unwrap() {
+            AiResponseChunk::Thinking => {}
+            other => panic!("expected Thinking, got {:?}", other),
+        }
+        match parse_line_codex(&mut state, r#"{"type":"item.updated","item":{"type":"reasoning","summary":[{"text":"hmm"}]}}"#).unwrap() {
+            AiResponseChunk::Thinking => {}
+            other => panic!("expected Thinking, got {:?}", other),
+        }
+        match parse_line_codex(&mut state, r#"{"type":"item.completed","item":{"id":"r1","type":"reasoning"}}"#).unwrap() {
+            AiResponseChunk::Thinking => {}
+            other => panic!("expected Thinking, got {:?}", other),
+        }
     }
 
     #[test]
