@@ -50,6 +50,18 @@ describe('AiPanelModelPicker', () => {
     expect(w.find('.ai-panel__status-dot--err').exists()).toBe(true);
   });
 
+  it('lists every CLI passed in, not only the current one', async () => {
+    const w = mount(AiPanelModelPicker, {
+      props: {
+        ...baseProps(),
+        availableClis: ['claude', 'codex', 'ollama', 'openai'],
+      },
+    });
+    await openPicker(w);
+    const options = w.findAll('select')[0].findAll('option').map(o => o.text());
+    expect(options).toEqual(['Claude', 'Codex', 'Ollama', 'OpenAI-compatible']);
+  });
+
   it('emits update:cli when CLI dropdown changes', async () => {
     const w = mount(AiPanelModelPicker, { props: baseProps() });
     await openPicker(w);

@@ -38,4 +38,28 @@ describe('AiChangeCard', () => {
     await w.get('.ai-change__btn--keep').trigger('click');
     expect(w.emitted('keep')?.[0]).toEqual([3]);
   });
+
+  it('renders an inline hunk with plus and minus counts', () => {
+    const w = mount(AiChangeCard, {
+      props: {
+        message: {
+          role: 'tool',
+          tool: 'Edit',
+          text: JSON.stringify({
+            file_path: '/tmp/notes.md',
+            old_string: 'alpha',
+            new_string: 'beta',
+          }),
+          changeStatus: 'pending',
+          done: true,
+        },
+        index: 1,
+        isActiveDoc: true,
+      },
+    });
+    expect(w.text()).toContain('+1');
+    expect(w.text()).toContain('-1');
+    expect(w.text()).toContain('alpha');
+    expect(w.text()).toContain('beta');
+  });
 });

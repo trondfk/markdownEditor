@@ -67,7 +67,8 @@ export interface PreambleOptions {
 export const PLAN_MODE_INSTRUCTIONS = [
   'PLAN MODE: reply with a numbered plan only.',
   'Do not call Edit, Write, write_file, or edit_file.',
-  'Do not change any files. Wait until the user asks you to carry the plan out.',
+  'Do not change any files.',
+  'If the user later asks you to carry the plan out, they will switch you to edit mode on the next turn.',
 ].join(' ');
 
 export const ASK_MODE_INSTRUCTIONS =
@@ -182,6 +183,9 @@ export function buildStaticPreamble(opts: PreambleOptions): string {
     lines.push(
       `When the user asks for edits to the active file, USE YOUR Edit / Write TOOLS to modify the file on disk directly. Do NOT return code fences with the proposed change — the host will reload the editor from disk after you finish.`,
     );
+    if (opts.workspaceRoot && !opts.workspaceWrite) {
+      lines.push(`Sibling notes under the workspace root are readable for context (related reports, earlier drafts). Only WRITE the main file.`);
+    }
   } else {
     lines.push(`Do not use Edit, Write, or Bash on this turn. Answer in chat.`);
   }

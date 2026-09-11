@@ -61,6 +61,7 @@ export const CODEX_EFFORTS: AiEffortOption[] = [
   { id: 'low', label: 'Low' },
   { id: 'medium', label: 'Medium' },
   { id: 'high', label: 'High' },
+  { id: 'xhigh', label: 'xHigh' },
 ];
 
 /** Convert installed Ollama model names (from /api/tags) into picker options. */

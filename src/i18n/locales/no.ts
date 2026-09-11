@@ -226,6 +226,8 @@ const no: Translations = {
   on: 'På',
   off: 'Av',
   language: 'Språk',
+  uiScale: 'Størrelse på grensesnitt',
+  uiScaleHelper: 'Skalerer menyer, knapper, assistenten og dokumentet. Zoom i statuslinjen endrer bare dokumentet.',
 
   // Update dialog
   updateAvailable: 'Oppdatering tilgjengelig',
@@ -462,6 +464,7 @@ const no: Translations = {
   aiSnapshotDeleteTooltip: 'Slett',
   aiRemove: 'Fjern',
   aiThinking: 'Tenker',
+  aiWebSearchActivity: 'Nett-søk',
   aiAccessAllowedToolsTitle: 'Tillatte verktøy',
   aiAccessAllowedToolsDesc: 'Av-verktøy blir stengt for Claude og Codex, ikke bare utelatt fra instruksen',
   aiAccessReadableFiles: 'Lesbare filer',
@@ -489,6 +492,7 @@ const no: Translations = {
   aiChangeKept: 'Beholdt',
   aiChangeUndone: 'Angret',
   aiChangeShowDiff: 'Vis diff',
+  aiChangeHiddenLines: (n) => n === 1 ? '1 uendret linje' : `${n} uendrede linjer`,
   aiComposerSettings: 'AI-innstillinger',
   aiLocalNoVision: 'Lokale modeller kan ikke se bilder i notatet. Bruk Claude eller Codex, eller lim inn bildet i chatten.',
   aiCustomInstructions: 'Egne instruksjoner',
@@ -499,6 +503,8 @@ const no: Translations = {
   aiModeAsk: 'Spør',
   aiModeAgent: 'Endre',
   aiModePlan: 'Planlegg',
+  aiCarryOutPlan: 'Utfør planen',
+  aiCarryOutPlanPrompt: 'Utfør den nummererte planen du nettopp skrev. Endre hoveddokumentet med filverktøyene. Ikke bare gjenta planen.',
   aiMentionPickFile: 'Velg fil',
   aiMentionEmpty: 'Ingen treff',
   aiAttachedFiles: 'Vedlagte filer',

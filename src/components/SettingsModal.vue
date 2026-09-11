@@ -8,6 +8,7 @@ import { useSystemFonts } from '../composables/useSystemFonts';
 import { useLayoutConfig, type LayoutZone } from '../composables/useLayoutConfig';
 import { getItemDef } from '../data/toolbarItems';
 import KeybindsSettingsTab from './KeybindsSettingsTab.vue';
+import AiSettingsTab from './ai/AiSettingsTab.vue';
 import { useAutoUpdate } from '../composables/useAutoUpdate';
 
 const { t, locale, setLocale, availableLocales, localeLabels } = useI18n();
@@ -16,6 +17,7 @@ const {
   toggleAutoSave,
   setTheme,
   setThemeVariant,
+  setUiScale,
   setCodeTheme,
   setEditorFontFamily,
   setCodeFontFamily,
@@ -585,6 +587,28 @@ onUnmounted(() => {
                 </div>
               </div>
             </div>
+
+            <div class="setting-row">
+              <label class="setting-label">{{ t.uiScale }}</label>
+              <div class="setting-control inline-control">
+                <input
+                  type="range"
+                  min="75"
+                  max="200"
+                  step="5"
+                  :value="settings.uiScale"
+                  @input="(e: Event) => setUiScale(Number((e.target as HTMLInputElement).value))"
+                  class="setting-range"
+                />
+                <button
+                  type="button"
+                  class="range-value range-value--btn"
+                  :title="t.reset"
+                  @click="setUiScale(100)"
+                >{{ settings.uiScale }}%</button>
+              </div>
+            </div>
+            <p class="setting-help">{{ t.uiScaleHelper }}</p>
 
             <!-- Workspace controls live exclusively in the left sidebar
                  now — no need to duplicate them under Settings. -->
@@ -1398,6 +1422,18 @@ onUnmounted(() => {
   min-width: 40px;
   text-align: right;
   font-variant-numeric: tabular-nums;
+}
+
+.range-value--btn {
+  border: none;
+  background: transparent;
+  padding: 0;
+  cursor: pointer;
+  font: inherit;
+}
+
+.range-value--btn:hover {
+  color: var(--text-primary);
 }
 
 /* Toggle group */

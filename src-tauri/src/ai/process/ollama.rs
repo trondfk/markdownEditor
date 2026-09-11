@@ -69,6 +69,38 @@ fn initial_messages(req: &AiSendRequest, num_ctx: u64) -> Vec<serde_json::Value>
     messages
 }
 
+/// Ollama's Qwen3.8 renderer 500s with "no user query found in messages" when a
+/// tool-loop continuation is truncated to `[assistant(tool_calls), tool]`.
+/// The original user turn was in the request; the server dropped it from the
+/// front of the window. Re-pinning the live prompt after tool results keeps a
+/// non-`<tool_response>` user turn at the end, which survives that truncation.
+/// See https://github.com/ollama/ollama/issues/17778
+fn pin_live_user_after_tools(messages: &mut Vec<serde_json::Value>, live_user: &str) {
+    if live_user.is_empty() {
+        return;
+    }
+    if let Some(last) = messages.last() {
+        if last.get("role").and_then(|r| r.as_str()) == Some("user")
+            && last.get("content").and_then(|c| c.as_str()) == Some(live_user)
+        {
+            return;
+        }
+    }
+    messages.push(serde_json::json!({ "role": "user", "content": live_user }));
+}
+
+fn tool_result_message(name: &str, content: &str) -> serde_json::Value {
+    serde_json::json!({
+        "role": "tool",
+        "tool_name": name,
+        "content": content,
+    })
+}
+
+fn is_missing_user_query_error(detail: &str) -> bool {
+    detail.to_ascii_lowercase().contains("no user query found in messages")
+}
+
 pub async fn stream(
     app: AppHandle,
     window_label: String,
@@ -196,9 +228,11 @@ async fn run_plain(
 /// with zero partial output. Tool calls are collected from `message.tool_calls`
 /// until the `done:true` line ends the round; a round that ends with tool
 /// calls executes them via `file_tools::run_tool` (emitting ToolRequest /
-/// ToolDenied chips), appends the results as `{role:"tool",content}` messages
-/// (no id), and loops — capped at MAX_TOOL_ROUNDS. A round without tool calls
-/// was the final answer. A first-round rejection falls back to plain chat:
+/// ToolDenied chips), appends `{role:"tool",tool_name,content}` results, then
+/// re-pins the live user prompt so Qwen3.8 still sees a user query if Ollama
+/// truncates the front of a long agent transcript. Capped at MAX_TOOL_ROUNDS.
+/// A round without tool calls was the final answer. A first-round rejection
+/// falls back to plain chat:
 /// gating stays permissive when the `/api/show` probe fails, so a non-tools
 /// model (or a server too old to stream tool calls) must degrade rather than
 /// error every send.
@@ -215,8 +249,11 @@ async fn run_tool_loop(
     let url = format!("{}/api/chat", base_url(&req));
     let client = crate::ai::process::http_client(None);
     let mut messages = initial_messages(&req, num_ctx);
+    let live_user = crate::ai::process::join_message_parts(&[req.turn_context.as_str(), req.prompt.as_str()]);
+    let mut retried_user_query = false;
+    let mut round = 0usize;
 
-    for round in 0..file_tools::MAX_TOOL_ROUNDS {
+    while round < file_tools::MAX_TOOL_ROUNDS {
         let body = serde_json::json!({
             "model": req.model.clone().unwrap_or_default(),
             "messages": messages,
@@ -242,6 +279,15 @@ async fn run_tool_loop(
                 );
                 run_plain(app, window_label, event, req, num_ctx, window, terminal).await;
                 return;
+            }
+            if is_missing_user_query_error(&detail) && !retried_user_query {
+                eprintln!(
+                    "[ai ollama] tool continuation missing user query (HTTP {}). Re-pinning the live prompt and retrying",
+                    status.as_u16()
+                );
+                pin_live_user_after_tools(&mut messages, &live_user);
+                retried_user_query = true;
+                continue;
             }
             let message = if detail.trim().is_empty() {
                 format!("Ollama request failed with HTTP {}.", status.as_u16())
@@ -297,11 +343,10 @@ async fn run_tool_loop(
                     err
                 }
             };
-            messages.push(serde_json::json!({
-                "role": "tool",
-                "content": result,
-            }));
+            messages.push(tool_result_message(&call.name, &result));
         }
+        pin_live_user_after_tools(&mut messages, &live_user);
+        round += 1;
     }
 
     emit_error(
@@ -667,5 +712,40 @@ mod tests {
             other => panic!("expected Thinking, got {:?}", other),
         }
         assert_eq!(out.content, "");
+    }
+
+    #[test]
+    fn tool_result_message_carries_tool_name() {
+        let msg = tool_result_message("search_files", "hits");
+        assert_eq!(msg["role"], "tool");
+        assert_eq!(msg["tool_name"], "search_files");
+        assert_eq!(msg["content"], "hits");
+    }
+
+    #[test]
+    fn pin_live_user_after_tools_appends_when_last_is_tool() {
+        let mut messages = vec![
+            serde_json::json!({ "role": "user", "content": "what is mimir" }),
+            serde_json::json!({ "role": "assistant", "content": "", "tool_calls": [] }),
+            tool_result_message("search_files", "[]"),
+        ];
+        pin_live_user_after_tools(&mut messages, "what is mimir");
+        assert_eq!(messages.len(), 4);
+        assert_eq!(messages[3]["role"], "user");
+        assert_eq!(messages[3]["content"], "what is mimir");
+    }
+
+    #[test]
+    fn pin_live_user_after_tools_skips_duplicate_trailing_user() {
+        let mut messages = vec![serde_json::json!({ "role": "user", "content": "what is mimir" })];
+        pin_live_user_after_tools(&mut messages, "what is mimir");
+        assert_eq!(messages.len(), 1);
+    }
+
+    #[test]
+    fn is_missing_user_query_error_matches_ollama_body() {
+        assert!(is_missing_user_query_error(r#"{"error":"no user query found in messages"}"#));
+        assert!(is_missing_user_query_error("No User Query Found In Messages"));
+        assert!(!is_missing_user_query_error("model does not support tools"));
     }
 }

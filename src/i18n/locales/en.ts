@@ -226,6 +226,8 @@ const en: Translations = {
   on: 'On',
   off: 'Off',
   language: 'Language',
+  uiScale: 'Interface size',
+  uiScaleHelper: 'Scales menus, buttons, the assistant and the document. Zoom in the status bar only changes the document.',
 
   // Update dialog
   updateAvailable: 'Update Available',
@@ -462,6 +464,7 @@ const en: Translations = {
   aiSnapshotDeleteTooltip: 'Delete',
   aiRemove: 'Remove',
   aiThinking: 'Thinking',
+  aiWebSearchActivity: 'Web search',
   aiAccessAllowedToolsTitle: 'Allowed tools',
   aiAccessAllowedToolsDesc: 'Off tools are blocked for Claude and Codex, not only omitted from the prompt',
   aiAccessReadableFiles: 'Readable files',
@@ -489,6 +492,7 @@ const en: Translations = {
   aiChangeKept: 'Kept',
   aiChangeUndone: 'Undone',
   aiChangeShowDiff: 'Show diff',
+  aiChangeHiddenLines: (n) => n === 1 ? '1 unchanged line' : `${n} unchanged lines`,
   aiComposerSettings: 'AI settings',
   aiLocalNoVision: 'Local models cannot see images in the note. Use Claude or Codex, or paste the picture into chat.',
   aiCustomInstructions: 'Custom instructions',
@@ -499,6 +503,8 @@ const en: Translations = {
   aiModeAsk: 'Ask',
   aiModeAgent: 'Agent',
   aiModePlan: 'Plan',
+  aiCarryOutPlan: 'Carry out the plan',
+  aiCarryOutPlanPrompt: 'Carry out the numbered plan you just wrote. Edit the main document with your file tools. Do not only repeat the plan.',
   aiMentionPickFile: 'Choose file',
   aiMentionEmpty: 'No matches',
   aiAttachedFiles: 'Attached files',

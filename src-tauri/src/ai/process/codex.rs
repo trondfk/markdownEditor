@@ -95,6 +95,12 @@ pub async fn spawn(req: &AiSendRequest) -> Result<Child, String> {
             cmd.arg("-c").arg(format!("model_reasoning_effort={}", effort));
         }
         cmd.arg("--sandbox").arg(sandbox_mode(&req.access_map.tools, req.bypass));
+        if req.access_map.tools.network {
+            cmd.arg("-c").arg("sandbox_workspace_write.network_access=true");
+        }
+        if let Some(cfg) = writable_roots_override(req, &cd) {
+            cmd.arg("-c").arg(cfg);
+        }
         if req.bypass {
             cmd.arg("--dangerously-bypass-approvals-and-sandbox");
         }
@@ -243,13 +249,13 @@ fn fallback_cd() -> String {
         .unwrap_or_else(|_| ".".to_string())
 }
 
-/// `--cd` is Codex's writable workspace under `workspace-write`. Using the
-/// MerMark workspace root here (the frontend `workDir`) used to make every
-/// note in the project writable. When bash is off we sit next to the
-/// writable markdown file instead. Enabling bash keeps the project root so
-/// shell commands have a sensible cwd (and then the whole tree is writable).
+/// `--cd` is Codex's working directory: Read/Grep start here. For notes and
+/// reports we want the MerMark workspace as cwd so sibling documents are
+/// visible. Writes stay pinned to the active note via
+/// `sandbox_workspace_write.writable_roots` (not by shrinking cwd). Bash is
+/// the exception: the whole tree stays writable, matching the old behaviour.
 fn spawn_cd(req: &AiSendRequest) -> String {
-    if req.access_map.tools.bash && !req.work_dir.is_empty() {
+    if !req.work_dir.is_empty() && (req.access_map.tools.file_read || req.access_map.tools.bash) {
         return req.work_dir.clone();
     }
     if req.access_map.tools.file_write {
@@ -283,6 +289,41 @@ fn spawn_add_dirs(req: &AiSendRequest) -> Vec<String> {
         }
     }
     out
+}
+
+fn spawn_write_dirs(req: &AiSendRequest) -> Vec<String> {
+    let mut roots = Vec::new();
+    for wp in &req.access_map.write_paths {
+        if wp.is_empty() {
+            continue;
+        }
+        let root = if looks_like_markdown_file(wp) {
+            path_parent(wp)
+        } else {
+            wp.clone()
+        };
+        if !roots.contains(&root) {
+            roots.push(root);
+        }
+    }
+    roots
+}
+
+/// Restrict workspace-write to the note's folder when cwd is the wider
+/// workspace. Skip when bash is on or the workspace root itself is writable.
+fn writable_roots_override(req: &AiSendRequest, cd: &str) -> Option<String> {
+    if !req.access_map.tools.file_write || req.access_map.tools.bash {
+        return None;
+    }
+    let roots = spawn_write_dirs(req);
+    if roots.is_empty() {
+        return None;
+    }
+    if roots.iter().any(|r| r == cd) {
+        return None;
+    }
+    let json = serde_json::to_string(&roots).ok()?;
+    Some(format!("sandbox_workspace_write.writable_roots={json}"))
 }
 
 #[cfg(test)]
@@ -345,17 +386,34 @@ mod tests {
     }
 
     #[test]
-    fn spawn_cd_without_bash_uses_the_note_folder_not_the_workspace() {
+    fn spawn_cd_without_bash_uses_workspace_cwd_and_pins_note_writes() {
         let req = req_with("/notes", &["/notes/folder/doc.md"], false, true);
-        assert_eq!(spawn_cd(&req), "/notes/folder");
+        assert_eq!(spawn_cd(&req), "/notes");
         assert!(spawn_add_dirs(&req).is_empty());
+        let cfg = writable_roots_override(&req, "/notes").expect("note folder should be pinned");
+        assert!(cfg.starts_with("sandbox_workspace_write.writable_roots="));
+        assert!(cfg.contains("/notes/folder"));
+        assert!(!cfg.contains("/notes/folder/doc.md"));
     }
 
     #[test]
-    fn spawn_add_dirs_includes_opt_in_workspace_root() {
+    fn writable_roots_override_skips_when_workspace_itself_is_writable() {
         let req = req_with("/notes", &["/notes/folder/doc.md", "/notes"], false, true);
-        assert_eq!(spawn_cd(&req), "/notes/folder");
-        assert_eq!(spawn_add_dirs(&req), vec!["/notes".to_string()]);
+        assert_eq!(spawn_cd(&req), "/notes");
+        assert!(writable_roots_override(&req, "/notes").is_none());
+    }
+
+    #[test]
+    fn writable_roots_override_skips_when_bash_is_on() {
+        let req = req_with("/notes", &["/notes/folder/doc.md"], true, true);
+        assert!(writable_roots_override(&req, "/notes").is_none());
+    }
+
+    #[test]
+    fn spawn_add_dirs_skips_workspace_root_when_it_is_cwd() {
+        let req = req_with("/notes", &["/notes/folder/doc.md", "/notes"], false, true);
+        assert_eq!(spawn_cd(&req), "/notes");
+        assert!(spawn_add_dirs(&req).is_empty());
     }
 
     #[test]

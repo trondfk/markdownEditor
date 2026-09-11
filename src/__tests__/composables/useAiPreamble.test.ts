@@ -229,6 +229,17 @@ describe('useAiPreamble.buildStaticPreamble', () => {
       expect(out).toContain('numbered plan');
     });
 
+    it('tells Codex to read sibling notes without writing them', () => {
+      const out = buildStaticPreamble({
+        ...base(),
+        workspaceRoot: '/Users/me/notes',
+        workspaceName: 'notes',
+        workspaceWrite: false,
+      });
+      expect(out).toContain('Sibling notes under the workspace root are readable');
+      expect(out).toContain('Only WRITE the main file');
+    });
+
     it('appends project instructions after user instructions', () => {
       const out = buildStaticPreamble({
         ...base(),

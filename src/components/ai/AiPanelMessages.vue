@@ -9,6 +9,7 @@ import type { AiMessage as AiMessageType, AttachedPin } from '../../composables/
 import { groupAiMessages } from '../../utils/ai-message-groups';
 import { formatElapsed } from '../../utils/format-elapsed';
 import { extractToolFilePath } from '../../utils/ai-tool-kind';
+import type { ChangeDiff } from '../../utils/ai-change-diff';
 
 const { t } = useI18n();
 
@@ -24,6 +25,8 @@ const props = defineProps<{
   lastToolName: string | null;
   isStalled: boolean;
   activeDocPath: string;
+  showCarryOutPlan?: boolean;
+  changeDiffs?: Record<number, ChangeDiff>;
 }>();
 
 const emit = defineEmits<{
@@ -34,6 +37,7 @@ const emit = defineEmits<{
   showChangeDiff: [index: number];
   cancel: [];
   reportFeedback: [];
+  carryOutPlan: [];
 }>();
 
 const messagesEl = ref<HTMLElement | null>(null);
@@ -54,7 +58,13 @@ const workingLabel = computed(() => {
   if (props.isStalled) return t.value.aiWorkingStalled;
   if (props.sendStartedAt) {
     const elapsed = formatElapsed(now.value - props.sendStartedAt);
-    const tool = props.lastToolName === 'thinking' ? t.value.aiThinking : (props.lastToolName ?? '');
+    const raw = props.lastToolName ?? '';
+    const lower = raw.toLowerCase();
+    const tool = raw === 'thinking' || lower === 'thinking'
+      ? t.value.aiThinking
+      : (lower === 'websearch' || lower === 'web_search'
+        ? t.value.aiWebSearchActivity
+        : raw);
     return t.value.aiWorkingElapsed(elapsed, tool);
   }
   return t.value.aiWorkingPlease;
@@ -97,6 +107,7 @@ const lastAssistantError = computed(() => {
         :message="g.message"
         :index="g.index"
         :is-active-doc="isActiveDoc(g.message.text)"
+        :file-diff="changeDiffs?.[g.index] ?? null"
         @keep="(i) => emit('keepChange', i)"
         @undo="(i) => emit('undoChange', i)"
         @show-diff="(i) => emit('showChangeDiff', i)"
@@ -121,6 +132,12 @@ const lastAssistantError = computed(() => {
         @click="emit('cancel')"
       >{{ t.aiCancelButton }}</button>
     </div>
+    <button
+      v-if="showCarryOutPlan && !isSending"
+      type="button"
+      class="ai-panel__carry-plan"
+      @click="emit('carryOutPlan')"
+    >{{ t.aiCarryOutPlan }}</button>
     <button
       v-if="lastAssistantError && !isSending"
       type="button"
@@ -175,6 +192,16 @@ const lastAssistantError = computed(() => {
   background: var(--bg-secondary);
   color: var(--text-primary);
   border-color: var(--border-primary);
+}
+.ai-panel__carry-plan {
+  align-self: flex-start;
+  border: 1px solid var(--border-primary);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 12px;
+  cursor: pointer;
 }
 .ai-panel__processing > span:first-child,
 .ai-panel__processing > span:nth-child(2),

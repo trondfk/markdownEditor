@@ -18,6 +18,8 @@ describe('classifyAiTool', () => {
     expect(classifyAiTool('Edit')).toBe('edit');
     expect(classifyAiTool('write_file')).toBe('edit');
     expect(classifyAiTool('edit_file')).toBe('edit');
+    expect(classifyAiTool('apply_patch')).toBe('edit');
+    expect(classifyAiTool('file_change')).toBe('edit');
   });
 
   it('returns other for unknown tools', () => {
@@ -38,6 +40,18 @@ describe('extractToolFilePath', () => {
   it('returns null when no path is present', () => {
     expect(extractToolFilePath({ command: 'rg foo' })).toBeNull();
     expect(extractToolFilePath('')).toBeNull();
+  });
+
+  it('reads the path from an apply_patch header', () => {
+    const patch = '*** Begin Patch\n*** Update File: docs/note.md\n@@\n-a\n+b\n*** End Patch';
+    expect(extractToolFilePath({ input: patch })).toBe('docs/note.md');
+    expect(extractToolFilePath(patch)).toBe('docs/note.md');
+  });
+
+  it('reads path from a nested changes array', () => {
+    expect(extractToolFilePath({
+      changes: [{ path: 'notes.md', diff: '@@\n-a\n+b\n' }],
+    })).toBe('notes.md');
   });
 });
 
