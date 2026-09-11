@@ -79,6 +79,7 @@ function pickMention(item: MentionItem) {
 }
 
 function onKeydown(e: KeyboardEvent) {
+  if (e.isComposing) return;
   if (mentionHit.value && mentionChoices.value.length > 0) {
     if (e.key === 'ArrowDown') {
       e.preventDefault();
@@ -90,7 +91,7 @@ function onKeydown(e: KeyboardEvent) {
       mentionIndex.value = (mentionIndex.value - 1 + mentionChoices.value.length) % mentionChoices.value.length;
       return;
     }
-    if (e.key === 'Enter' && !e.ctrlKey && !e.metaKey) {
+    if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       pickMention(mentionChoices.value[mentionIndex.value]);
       return;
@@ -101,7 +102,8 @@ function onKeydown(e: KeyboardEvent) {
       return;
     }
   }
-  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+  // Enter sends, like most chat UIs. Shift+Enter keeps a newline in the box.
+  if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault();
     emit('send');
   }

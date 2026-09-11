@@ -136,6 +136,7 @@ const editor: CodeEditorHandle = {
       key: 'cursor-line-highlight',
     });
   },
+  getScrollElement: () => view?.scrollDOM ?? null,
 };
 
 defineExpose({ editor });

@@ -59,9 +59,18 @@ describe('AiPanelComposer model guard', () => {
     expect(w.emitted('openSettings')).toBeTruthy();
   });
 
-  it('does not print the Ctrl+Enter shortcut in the action bar', () => {
+  it('does not print the send shortcut in the action bar', () => {
     const w = mount(AiPanelComposer, { props: baseProps() });
-    expect(w.text()).not.toContain('Ctrl+Enter');
-    expect(sendButton(w).attributes('title')).toContain('Ctrl+Enter');
+    expect(w.text()).not.toContain('Enter to send');
+    expect(sendButton(w).attributes('title')).toContain('Enter to send');
+  });
+
+  it('sends on Enter and keeps Shift+Enter for a new line', async () => {
+    const w = mount(AiPanelComposer, { props: baseProps() });
+    const input = w.find('textarea');
+    await input.trigger('keydown', { key: 'Enter', shiftKey: false });
+    expect(w.emitted('send')).toHaveLength(1);
+    await input.trigger('keydown', { key: 'Enter', shiftKey: true });
+    expect(w.emitted('send')).toHaveLength(1);
   });
 });

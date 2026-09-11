@@ -1,3 +1,5 @@
+<!-- ABOUTME: Line-number gutter for the visual editor, aligned to measured line boxes.
+     ABOUTME: Width matches --editor-gutter-width so numbers stay left of the text. -->
 <script setup lang="ts">
 import type { LineEntry } from '../composables/useLineNumbers';
 
@@ -25,7 +27,7 @@ defineProps<{
   position: absolute;
   top: 0;
   left: 0;
-  width: calc(80px + var(--editor-gutter-width, 3.5em));
+  width: var(--editor-gutter-width, 3.5em);
   height: 100%;
   pointer-events: none;
   user-select: none;

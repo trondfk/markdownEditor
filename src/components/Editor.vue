@@ -67,7 +67,7 @@ import { HighlightExtension } from "../extensions/HighlightExtension";
 import { Placeholder } from "@tiptap/extension-placeholder";
 import { CharacterCount } from "@tiptap/extension-character-count";
 import { common, createLowlight } from "lowlight";
-import { watch, ref, nextTick, computed, watchEffect } from "vue";
+import { watch, ref, nextTick, computed, watchEffect, onBeforeUnmount } from "vue";
 import { Extension, Node, mergeAttributes, textblockTypeInputRule } from "@tiptap/core";
 import { useEditorZoom } from "../composables/useEditorZoom";
 import { useSettings } from "../composables/useSettings";
@@ -76,6 +76,7 @@ import { useLineNumbers } from "../composables/useLineNumbers";
 import { resolveEditorImages, getDirectoryFromFilePath } from "../utils/image-resolver";
 import { importImageBytes } from "../services/imageImport";
 import { clipboardHtmlToEditorHtml, isInternalEditorHtml } from "../utils/clipboard-html";
+import { isLeftMarginClick, visualLineRange } from "../utils/visual-line-select";
 import TableContextMenu from "./TableContextMenu.vue";
 import ImagePreview from "./ImagePreview.vue";
 import EditorGutter from "./EditorGutter.vue";
@@ -677,6 +678,57 @@ watch(
 // Footnote interactions (tooltip, popover, auto-open after toolbar insert)
 const footnotes = useFootnotes(editor, editorContainerRef);
 
+let marginSelectAnchor: { from: number; to: number } | null = null;
+
+function applyVisualLineSelection(from: number, to: number) {
+  const ed = editor.value;
+  if (!ed) return;
+  const size = ed.state.doc.content.size;
+  const a = Math.max(0, Math.min(from, to, size));
+  const b = Math.max(0, Math.min(Math.max(from, to), size));
+  ed.chain().focus().setTextSelection({ from: a, to: b }).run();
+}
+
+function stopMarginSelect() {
+  marginSelectAnchor = null;
+  window.removeEventListener('mousemove', onMarginSelectMove);
+  window.removeEventListener('mouseup', stopMarginSelect);
+}
+
+function onMarginSelectMove(event: MouseEvent) {
+  if (!marginSelectAnchor || !editor.value) return;
+  const view = editor.value.view;
+  const pmRect = view.dom.getBoundingClientRect();
+  const range = visualLineRange(view, event.clientY, pmRect.left + 1);
+  if (!range) return;
+  applyVisualLineSelection(
+    Math.min(marginSelectAnchor.from, range.from),
+    Math.max(marginSelectAnchor.to, range.to),
+  );
+}
+
+function handleMarginMouseDown(event: MouseEvent) {
+  if (event.button !== 0 || !editor.value) return;
+  const target = event.target as HTMLElement;
+  if (target.closest('a, img, button, textarea, .footnote-popover, .editor-image-toolbar, .table-context-menu')) {
+    return;
+  }
+  const view = editor.value.view;
+  const pmRect = view.dom.getBoundingClientRect();
+  if (event.clientY < pmRect.top || event.clientY > pmRect.bottom) return;
+  if (!isLeftMarginClick(event.clientX, pmRect.left)) return;
+
+  event.preventDefault();
+  const range = visualLineRange(view, event.clientY, pmRect.left + 1);
+  if (!range) return;
+  marginSelectAnchor = range;
+  applyVisualLineSelection(range.from, range.to);
+  window.addEventListener('mousemove', onMarginSelectMove);
+  window.addEventListener('mouseup', stopMarginSelect);
+}
+
+onBeforeUnmount(stopMarginSelect);
+
 // Handle clicks on links, images, and footnote refs
 const handleEditorClick = (event: MouseEvent) => {
   if (footnotes.handleClick(event)) return;
@@ -879,6 +931,7 @@ defineExpose({
     class="editor-container"
     ref="editorContainerRef"
     @click="handleEditorClick"
+    @mousedown="handleMarginMouseDown"
     @contextmenu="handleContextMenu"
     @mouseover="(e) => { footnotes.handleMouseOver(e); handleEditorMouseOver(e); }"
     @mouseout="(e) => { footnotes.handleMouseOut(e); handleEditorMouseOut(e); }"
@@ -983,29 +1036,35 @@ defineExpose({
 .editor-content-wrapper.has-line-numbers .editor-content {
   /* Side padding still respects the line-number gutter; user's setting
      is added on top of the fixed gutter width. */
-  padding-left: calc(var(--editor-pad-x, 24px) + var(--editor-gutter-width));
+  padding-left: calc(var(--editor-pad-x, 80px) + var(--editor-gutter-width));
 }
 
 .editor-content {
   background: var(--editor-content-bg);
   display: flex;
   flex-direction: column;
-  /* User-tunable paddings (Settings → Editor → Padding). Defaults defined
-     in useSettings; the var fallbacks here only matter on first paint
-     before applyCssVars runs. */
-  padding: var(--editor-pad-top, 16px) var(--editor-pad-x, 24px) var(--editor-pad-bottom, 32px);
+  /* Shared by default and minimal. Settings → Editor → Padding.
+     Fallbacks only matter on first paint before applyCssVars. */
+  padding-top: var(--editor-pad-top, 32px);
+  padding-right: var(--editor-pad-x, 80px);
+  padding-bottom: var(--editor-pad-bottom, 48px);
+  padding-left: var(--editor-pad-x, 80px);
   min-height: 100%;
   box-shadow: var(--shadow-sm);
   border-radius: 4px;
 }
 
-.editor-content .tiptap {
+.editor-content .tiptap,
+.editor-content .ProseMirror {
   flex: 1;
   outline: none !important;
   border: none !important;
   min-height: 0;
   text-align: left;
   font-family: var(--editor-font-family, inherit);
+  /* Inset lives on `.editor-content` so default and minimal share one gap
+     between the paper box and the text. */
+  padding: 0;
 }
 
 .editor-content .tiptap:focus {

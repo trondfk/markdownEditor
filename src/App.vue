@@ -911,6 +911,7 @@ const {
 } = useSplitEditor();
 
 const splitEditorPanesRef = ref<HTMLElement | null>(null);
+const splitCodeEditorRef = ref<InstanceType<typeof CodeEditor> | null>(null);
 
 const splitEditorCodeStyle = computed(() => ({
   flex: `0 0 ${splitEditorRatio.value * 100}%`,
@@ -926,7 +927,22 @@ function onSplitEditorResize(clientX: number) {
 }
 
 // Proportional scroll-sync between the split code pane and the live preview.
+// The code pane is CodeMirror's .cm-scroller (not a textarea).
 const scrollSync = useScrollSync();
+
+function attachSplitScroll() {
+  const pick = (): boolean => {
+    const codeEl =
+      splitCodeEditorRef.value?.editor?.getScrollElement?.()
+      ?? document.querySelector<HTMLElement>('.split-editor-code .cm-scroller');
+    const previewEl = document.querySelector<HTMLElement>('.split-editor-preview .editor-container');
+    if (!codeEl || !previewEl) return false;
+    scrollSync.attach(codeEl, previewEl);
+    return true;
+  };
+  if (pick()) return;
+  requestAnimationFrame(() => { pick(); });
+}
 
 // Latest HTML emitted by the read-only preview editor. Committed back to the
 // code source only on a real in-preview edit (see onSplitPreviewChanged).
@@ -1004,9 +1020,7 @@ const toggleSplitEditor = async () => {
     enterSplitEditor(html);
     splitEditorActive.value = true;
     await nextTick();
-    const codeEl = document.querySelector<HTMLElement>('#code-editor-textarea');
-    const previewEl = document.querySelector<HTMLElement>('.split-editor-preview .editor-container');
-    if (codeEl && previewEl) scrollSync.attach(codeEl, previewEl);
+    attachSplitScroll();
     isLoadingContent.value = false;
     return;
   }
@@ -2222,6 +2236,7 @@ onUnmounted(async () => {
         <div ref="splitEditorPanesRef" class="split-editor-panes">
           <div class="split-editor-code" :style="splitEditorCodeStyle">
             <CodeEditor
+              ref="splitCodeEditorRef"
               :model-value="splitMarkdownSource"
               @update:model-value="handleSplitMarkdownInput"
             />
