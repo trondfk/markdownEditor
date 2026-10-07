@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Tab } from '../../composables/useTabs';
 import type { UnsavedTab } from '../../composables/useCloseConfirmation';
+import { setDocumentMarkdown } from '../../utils/save-state';
 
 // Captures the close callback so a test can fire a window-close itself.
 const windowMocks = vi.hoisted(() => ({
@@ -57,6 +58,7 @@ vi.mock('@tauri-apps/api/path', () => ({
 }));
 
 import { useCloseConfirmation } from '../../composables/useCloseConfirmation';
+import { exit } from '@tauri-apps/plugin-process';
 
 describe('useCloseConfirmation', () => {
   const createMockTab = (overrides: Partial<Tab> = {}): Tab => ({
@@ -236,6 +238,104 @@ describe('useCloseConfirmation', () => {
   });
 
   describe('save-on-quit never destroys a document', () => {
+    it('does not exit or discard edits made while the close-save is writing', async () => {
+      const tab = createMockTab({
+        filePath: 'D:/notes/important.md',
+        content: '# First edit',
+        hasChanges: true,
+        originalMarkdown: '# Old',
+      });
+      let release!: () => void;
+      let started!: () => void;
+      const pending = new Promise<void>(resolve => { release = resolve; });
+      const entered = new Promise<void>(resolve => { started = resolve; });
+      fsMocks.rename.mockImplementationOnce(async (from, to) => {
+        started();
+        await pending;
+        fsMocks.files.set(to, fsMocks.files.get(from)!);
+        fsMocks.files.delete(from);
+      });
+      const options = createMockOptions([{ paneId: 'left', tab }]);
+      const close = useCloseConfirmation(options);
+      await close.setupCloseHandler();
+      await requestClose();
+      const saving = close.handleSave();
+      await entered;
+      tab.content = '# First edit plus newer work';
+      setDocumentMarkdown(tab, tab.content);
+      release();
+      await saving;
+
+      expect(fsMocks.files.get(tab.filePath!)).toBe('# First edit');
+      expect(tab.content).toBe('# First edit plus newer work');
+      expect.soft(tab.hasChanges).toBe(true);
+      expect.soft(exit).not.toHaveBeenCalled();
+      expect.soft(close.currentTabToSave.value?.tab.id).toBe(tab.id);
+    });
+
+    it('checks earlier saved tabs again before exiting after another tab saves', async () => {
+      const first = createMockTab({ id: 'first', filePath: '/first.md', hasChanges: true });
+      const second = createMockTab({ id: 'second', filePath: '/second.md', hasChanges: true });
+      const close = useCloseConfirmation(createMockOptions([
+        { paneId: 'left', tab: first }, { paneId: 'right', tab: second },
+      ]));
+      await close.setupCloseHandler();
+      await requestClose();
+      await close.handleSave();
+      expect(first.hasChanges).toBe(false);
+      expect(close.currentTabToSave.value?.tab.id).toBe(second.id);
+
+      let release!: () => void;
+      let entered!: () => void;
+      const started = new Promise<void>(resolve => { entered = resolve; });
+      const gate = new Promise<void>(resolve => { release = resolve; });
+      fsMocks.rename.mockImplementationOnce(async (from, to) => {
+        entered();
+        await gate;
+        fsMocks.files.set(to, fsMocks.files.get(from)!);
+        fsMocks.files.delete(from);
+      });
+      const saving = close.handleSave();
+      await started;
+      first.content = '<p>Newer work in the earlier tab</p>';
+      setDocumentMarkdown(first, first.content);
+      release();
+      await saving;
+
+      expect(exit).not.toHaveBeenCalled();
+      expect(close.currentTabToSave.value?.tab.id).toBe(first.id);
+      expect(close.showSaveConfirmDialog.value).toBe(true);
+      await close.handleSave();
+      expect(fsMocks.files.get('/first.md')).toBe(first.content);
+      expect(exit).toHaveBeenCalledWith(0);
+    });
+
+    it('does not exit when the close operation is cancelled during its save', async () => {
+      const tab = createMockTab({ filePath: '/doc.md', hasChanges: true });
+      const close = useCloseConfirmation(createMockOptions([{ paneId: 'left', tab }]));
+      await close.setupCloseHandler();
+      await requestClose();
+      let release!: () => void;
+      let entered!: () => void;
+      const started = new Promise<void>(resolve => { entered = resolve; });
+      const gate = new Promise<void>(resolve => { release = resolve; });
+      fsMocks.rename.mockImplementationOnce(async (from, to) => {
+        entered();
+        await gate;
+        fsMocks.files.set(to, fsMocks.files.get(from)!);
+        fsMocks.files.delete(from);
+      });
+      const saving = close.handleSave();
+      await started;
+      close.handleCancel();
+      release();
+      await saving;
+
+      expect(fsMocks.files.get('/doc.md')).toBe(tab.content);
+      expect(exit).not.toHaveBeenCalled();
+      expect(close.showSaveConfirmDialog.value).toBe(false);
+    });
+
     // Regression: the active tab used to be serialized straight from the WYSIWYG
     // editor. In code view / split-editor / large-file mode that component is
     // unmounted and yielded the '<p></p>' placeholder, so clicking "Save" in the

@@ -1,6 +1,8 @@
 import { ref, computed, nextTick, type Ref, type ComputedRef } from 'vue';
 import { t } from '../i18n';
 import { EMPTY_TAB_CONTENT } from '../constants';
+import { refreshDirtyState, setDocumentMarkdown } from '../utils/save-state';
+import { htmlToMarkdown } from '../utils/markdown-converter';
 
 export interface Tab {
   id: string;
@@ -8,6 +10,10 @@ export interface Tab {
   fileName: string;
   content: string;
   hasChanges: boolean;
+  /** Monotonic edit counter, including raw-source edits that do not update HTML. */
+  editRevision?: number;
+  /** Current authoritative Markdown. HTML and pendingMarkdown are view caches. */
+  markdown?: string;
   scrollTop: number;
   originalMarkdown: string | null;
   /**
@@ -96,10 +102,6 @@ export function useTabs(): UseTabsReturn {
       }
     }
 
-    // Get the target tab's hasChanges state before switching
-    const targetTab = tabs.value.find(t => t.id === tabId);
-    const targetHasChanges = targetTab?.hasChanges || false;
-
     activeTabId.value = tabId;
 
     // Update editor with new tab's content
@@ -108,11 +110,11 @@ export function useTabs(): UseTabsReturn {
 
       await nextTick();
 
-      // Preserve the tab's original hasChanges state after content load
+      // Content load notifications cannot override the document's saved state.
       if (preserveHasChanges) {
         const tab = tabs.value.find(t => t.id === tabId);
         if (tab) {
-          tab.hasChanges = targetHasChanges;
+          refreshDirtyState(tab);
         }
       }
     }
@@ -156,14 +158,17 @@ export function useTabs(): UseTabsReturn {
   const updateTabContent = (content: string): void => {
     const idx = findActiveTabIndex();
     if (idx !== -1) {
+      if (tabs.value[idx].content !== content) {
+        setDocumentMarkdown(tabs.value[idx], htmlToMarkdown(content));
+      }
       tabs.value[idx].content = content;
     }
   };
 
-  const updateTabChanges = (hasChanges: boolean): void => {
+  const updateTabChanges = (_hasChanges: boolean): void => {
     const idx = findActiveTabIndex();
     if (idx !== -1) {
-      tabs.value[idx].hasChanges = hasChanges;
+      refreshDirtyState(tabs.value[idx]);
     }
   };
 

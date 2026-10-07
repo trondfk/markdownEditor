@@ -8,6 +8,8 @@ import {
 } from '../types/pane';
 import { t } from '../i18n';
 import { EMPTY_TAB_CONTENT } from '../constants';
+import { refreshDirtyState, setDocumentMarkdown } from '../utils/save-state';
+import { htmlToMarkdown } from '../utils/markdown-converter';
 
 const STORAGE_KEY = 'mermark-split-view';
 export const MIN_SPLIT_RATIO = 0.2;
@@ -245,17 +247,18 @@ export function useSplitView(): UseSplitViewReturn {
 
     const tab = pane.tabs.find(t => t.id === tabId);
     if (tab) {
+      if (tab.content !== content) setDocumentMarkdown(tab, htmlToMarkdown(content));
       tab.content = content;
     }
   };
 
-  const updateTabChanges = (paneId: string, tabId: string, hasChanges: boolean): void => {
+  const updateTabChanges = (paneId: string, tabId: string, _hasChanges: boolean): void => {
     const pane = findPane(paneId);
     if (!pane) return;
 
     const tab = pane.tabs.find(t => t.id === tabId);
     if (tab) {
-      tab.hasChanges = hasChanges;
+      refreshDirtyState(tab);
     }
   };
 

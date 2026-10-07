@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, onMounted, nextTick } from 'vue';
 import { useSplitView, MIN_SPLIT_RATIO, MAX_SPLIT_RATIO } from '../composables/useSplitView';
 import { useTabDrag } from '../composables/useTabDrag';
 import { useWindowManager } from '../composables/useWindowManager';
@@ -7,6 +7,7 @@ import { htmlToMarkdown } from '../utils/markdown-converter';
 import { wouldTruncateDocument } from '../utils/save-guard';
 import { atomicWriteTextFile } from '../utils/atomic-write';
 import { auditShrink } from '../utils/save-audit';
+import { captureSaveState, completeSave, isSaveStateCurrent } from '../utils/save-state';
 import { ratioFromPointer } from '../utils/resize';
 import type { Tab } from '../composables/useTabs';
 import EditorPane from './EditorPane.vue';
@@ -32,9 +33,9 @@ const {
 
 const { setOnDrop, setOnDropOutside } = useTabDrag();
 const {
-  createNewWindow,
+  createTransferWindow,
+  closeWindow,
   closeCurrentWindow,
-  unregisterOpenFile,
   getAllWindows,
   getCurrentWindowLabel,
   transferTabToWindow,
@@ -87,29 +88,31 @@ onMounted(() => {
     try {
       const pane = splitState.value.panes.find(p => p.id === paneId);
       const tab = pane?.tabs.find(t => t.id === tabId);
+      if (!tab || tab.filePath !== filePath) return;
 
       // Save file content before transfer. tab.content is stale in code view and
       // empty for markdown-first tabs, so go through the resolver.
-      if (tab) {
-        const source = props.getTabMarkdown
-          ? props.getTabMarkdown(paneId, tab)
-          : htmlToMarkdown(tab.content);
-        if (source === null) {
-          console.error('[transfer] no editor could supply content for', filePath);
-          return;
-        }
-        const markdownContent = source.trimEnd();
-        if (wouldTruncateDocument(markdownContent, tab.originalMarkdown)) {
-          console.error('[transfer] refused to empty', filePath);
-          return;
-        }
-        auditShrink('tab-transfer', filePath, markdownContent, tab.originalMarkdown);
-        await atomicWriteTextFile(filePath, markdownContent);
+      const source = props.getTabMarkdown
+        ? props.getTabMarkdown(paneId, tab)
+        : htmlToMarkdown(tab.content);
+      if (source === null) {
+        console.error('[transfer] no editor could supply content for', filePath);
+        return;
       }
+      const state = captureSaveState(tab, source);
+      const markdownContent = source.trimEnd();
+      if (wouldTruncateDocument(markdownContent, tab.originalMarkdown)) {
+        console.error('[transfer] refused to empty', filePath);
+        return;
+      }
+      auditShrink('tab-transfer', filePath, markdownContent, tab.originalMarkdown);
+      await atomicWriteTextFile(filePath, markdownContent);
+      if (!completeSave(state, filePath, markdownContent)) return;
 
       // Get current window label and all windows
       const currentWindow = await getCurrentWindowLabel();
       const allWindows = await getAllWindows();
+      if (!isSaveStateCurrent(state)) return;
 
       // Find other windows (excluding current one)
       const otherWindows = allWindows.filter(w => w !== currentWindow);
@@ -117,24 +120,31 @@ onMounted(() => {
       console.log('[SplitContainer] Current window:', currentWindow);
       console.log('[SplitContainer] Other windows:', otherWindows);
 
-      // Unregister the file from this window before transfer
-      await unregisterOpenFile(filePath);
+      const createdWindow = otherWindows.length === 0;
+      const targetWindow = createdWindow
+        ? await createTransferWindow()
+        : otherWindows.includes('main') ? 'main' : otherWindows[0];
+      const sourcePane = splitState.value.panes.find(p => p.tabs.includes(tab));
+      if (!sourcePane || !isSaveStateCurrent(state)) {
+        if (createdWindow) await closeWindow(targetWindow);
+        return;
+      }
 
-      if (otherWindows.length > 0) {
-        // Transfer to an existing window (prefer 'main' if available, otherwise first other window)
-        const targetWindow = otherWindows.includes('main') ? 'main' : otherWindows[0];
-        console.log('[SplitContainer] Transferring to existing window:', targetWindow);
+      // Detach the editor before ownership moves. A rejected handoff restores it;
+      // an accepted handoff leaves only the destination owning the document.
+      const sourceIndex = sourcePane.tabs.indexOf(tab);
+      const sourceActiveId = sourcePane.activeTabId;
+      removeTabWithoutCreate(sourcePane.id, tabId);
+      await nextTick();
+      try {
         await transferTabToWindow(filePath, currentWindow, targetWindow);
-      } else {
-        // No other windows exist, create a new one
-        console.log('[SplitContainer] Creating new window');
-        await createNewWindow(filePath);
+      } catch (error) {
+        const restorePane = splitState.value.panes.find(p => p.id === sourcePane.id) ?? leftPane.value;
+        restorePane.tabs.splice(sourceIndex, 0, tab);
+        if (sourceActiveId === tabId || !restorePane.activeTabId) restorePane.activeTabId = tabId;
+        if (createdWindow) await closeWindow(targetWindow);
+        throw error;
       }
-
-      if (tab) {
-        tab.hasChanges = false;
-      }
-      removeTabWithoutCreate(paneId, tabId);
 
       if (isWindowEmpty()) {
         await closeCurrentWindow();
@@ -142,7 +152,7 @@ onMounted(() => {
       }
 
       if (isSplitActive.value) {
-        const sourcePaneAfter = splitState.value.panes.find(p => p.id === paneId);
+        const sourcePaneAfter = splitState.value.panes.find(p => p.id === sourcePane.id);
         if (sourcePaneAfter && sourcePaneAfter.tabs.length === 0) {
           disableSplit();
         }
@@ -183,7 +193,8 @@ const handleContentUpdate = (paneId: string, tabId: string, content: string) => 
 
 const handleChangesUpdate = (paneId: string, tabId: string, hasChanges: boolean) => {
   updateTabChanges(paneId, tabId, hasChanges);
-  emit('changesUpdated', paneId, tabId, hasChanges);
+  const tab = splitState.value.panes.find(p => p.id === paneId)?.tabs.find(t => t.id === tabId);
+  emit('changesUpdated', paneId, tabId, tab?.hasChanges ?? false);
 };
 
 const handleLinkClick = (href: string) => {

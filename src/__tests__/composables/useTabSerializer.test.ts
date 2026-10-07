@@ -95,6 +95,17 @@ describe('useTabSerializer', () => {
   });
 
   describe('markdown-first (large) tabs', () => {
+    it('uses the authoritative source when the inactive lazy cache is delayed', () => {
+      const { getTabMarkdown } = setup({ isMarkdownFirst: () => true });
+      const tab = makeTab({ id: 'other', content: '', pendingMarkdown: 'Old cache', markdown: 'Current edits' });
+      expect(getTabMarkdown('left', tab)).toBe('Current edits');
+    });
+
+    it('uses the authoritative source when inactive raw-source edits have stale HTML', () => {
+      const { getTabMarkdown } = setup();
+      const tab = makeTab({ id: 'other', content: '<p>Old cache</p>', markdown: 'Current edits' });
+      expect(getTabMarkdown('right', tab)).toBe('Current edits');
+    });
     it('reads pendingMarkdown rather than the empty cached HTML', () => {
       const { getTabMarkdown } = setup({ isMarkdownFirst: () => true });
 

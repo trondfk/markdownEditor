@@ -59,23 +59,28 @@ describe('useTabs', () => {
   });
 
   describe('updateTabChanges', () => {
-    it('should update hasChanges for active tab', () => {
-      const { tabs, updateTabChanges } = useTabs();
+    it('derives dirty state from content and ignores contradictory editor status', () => {
+      const { tabs, updateTabChanges, updateTabContent } = useTabs();
 
       expect(tabs.value[0].hasChanges).toBe(false);
 
+      updateTabContent('<p>Edited</p>');
       updateTabChanges(true);
       expect(tabs.value[0].hasChanges).toBe(true);
 
       updateTabChanges(false);
+      expect(tabs.value[0].hasChanges).toBe(true);
+      updateTabContent('<p></p>');
+      updateTabChanges(true);
       expect(tabs.value[0].hasChanges).toBe(false);
     });
 
     it('should only update active tab', () => {
-      const { tabs, createNewTab, updateTabChanges } = useTabs();
+      const { tabs, createNewTab, updateTabChanges, updateTabContent } = useTabs();
       createNewTab();
 
       // Active tab is still tab-1
+      updateTabContent('<p>Edited</p>');
       updateTabChanges(true);
 
       expect(tabs.value[0].hasChanges).toBe(true);
@@ -138,8 +143,9 @@ describe('useTabs', () => {
 
   describe('hasChanges tracking across tabs', () => {
     it('should preserve hasChanges when creating new tabs', () => {
-      const { tabs, createNewTab, updateTabChanges } = useTabs();
+      const { tabs, createNewTab, updateTabChanges, updateTabContent } = useTabs();
 
+      updateTabContent('<p>Edited</p>');
       updateTabChanges(true);
       createNewTab();
 
@@ -148,16 +154,18 @@ describe('useTabs', () => {
     });
 
     it('should track hasChanges independently for each tab', () => {
-      const { tabs, createNewTab, activeTabId, updateTabChanges } = useTabs();
+      const { tabs, createNewTab, activeTabId, updateTabChanges, updateTabContent } = useTabs();
       createNewTab();
       createNewTab();
 
       // Mark tab 1 as changed
       activeTabId.value = tabs.value[0].id;
+      updateTabContent('<p>Edited</p>');
       updateTabChanges(true);
 
       // Mark tab 3 as changed
       activeTabId.value = tabs.value[2].id;
+      updateTabContent('<p>Edited</p>');
       updateTabChanges(true);
 
       expect(tabs.value[0].hasChanges).toBe(true);

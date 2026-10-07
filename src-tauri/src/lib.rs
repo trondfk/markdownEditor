@@ -179,24 +179,80 @@ fn get_current_window_label(window: tauri::Window) -> String {
 #[tauri::command]
 async fn transfer_tab_to_window(
     app: tauri::AppHandle,
+    registry: tauri::State<'_, OpenFilesRegistry>,
     file_path: String,
     source_window: String,
     target_window: String,
 ) -> Result<(), String> {
     let payload = TabTransferPayload {
-        file_path,
-        source_window,
+        file_path: file_path.clone(),
+        source_window: source_window.clone(),
         target_window: target_window.clone(),
     };
 
     if let Some(target) = app.get_webview_window(&target_window) {
-        target.emit("tab-transfer", payload).map_err(|e| e.to_string())?;
-        target.set_focus().map_err(|e| e.to_string())?;
+        {
+            let mut files = registry.0.lock().unwrap();
+            commit_tab_transfer(&mut files, &file_path, &source_window, &target_window, || {
+                target.emit("tab-transfer", payload).map_err(|e| e.to_string())
+            })?;
+        }
+        // Focus failure cannot undo an already delivered ownership handoff.
+        let _ = target.set_focus();
     } else {
         return Err(format!("Window {} not found", target_window));
     }
 
     Ok(())
+}
+
+fn commit_tab_transfer(
+    files: &mut HashMap<String, String>,
+    file_path: &str,
+    source_window: &str,
+    target_window: &str,
+    deliver: impl FnOnce() -> Result<(), String>,
+) -> Result<(), String> {
+    let previous = files.get(file_path).cloned();
+    if previous.as_deref().is_some_and(|owner| owner != source_window) {
+        return Err("Source window no longer owns the file".to_string());
+    }
+    files.insert(file_path.to_string(), target_window.to_string());
+    if let Err(error) = deliver() {
+        match previous {
+            Some(owner) => { files.insert(file_path.to_string(), owner); }
+            None => { files.remove(file_path); }
+        }
+        return Err(error);
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tab_transfer_tests {
+    use super::commit_tab_transfer;
+    use std::collections::HashMap;
+
+    #[test]
+    fn successful_transfer_moves_ownership() {
+        let mut files = HashMap::from([("doc.md".to_string(), "main".to_string())]);
+        commit_tab_transfer(&mut files, "doc.md", "main", "target", || Ok(())).unwrap();
+        assert_eq!(files.get("doc.md").map(String::as_str), Some("target"));
+    }
+
+    #[test]
+    fn failed_delivery_restores_ownership() {
+        let mut files = HashMap::from([("doc.md".to_string(), "main".to_string())]);
+        assert!(commit_tab_transfer(&mut files, "doc.md", "main", "target", || Err("missing".to_string())).is_err());
+        assert_eq!(files.get("doc.md").map(String::as_str), Some("main"));
+    }
+
+    #[test]
+    fn rejects_another_owner_before_delivery() {
+        let mut files = HashMap::from([("doc.md".to_string(), "other".to_string())]);
+        assert!(commit_tab_transfer(&mut files, "doc.md", "main", "target", || panic!("must not deliver")).is_err());
+        assert_eq!(files.get("doc.md").map(String::as_str), Some("other"));
+    }
 }
 
 // ============== AI commands (storage + health) ==============
@@ -897,16 +953,25 @@ fn list_system_fonts() -> Vec<String> {
 }
 
 #[tauri::command]
-async fn create_new_window(app: tauri::AppHandle, file_path: Option<String>) -> Result<String, String> {
+async fn create_new_window(
+    app: tauri::AppHandle,
+    file_path: Option<String>,
+    defer_open: Option<bool>,
+) -> Result<String, String> {
     let window_id = WINDOW_COUNTER.fetch_add(1, Ordering::SeqCst);
     let window_label = format!("window-{}", window_id);
 
-    let url = match &file_path {
-        Some(path) => {
-            let encoded_path = urlencoding::encode(path);
-            format!("index.html?file={}", encoded_path)
+    let defer_open = defer_open.unwrap_or(false);
+    let url = if defer_open {
+        "index.html?transfer=1".to_string()
+    } else {
+        match &file_path {
+            Some(path) => {
+                let encoded_path = urlencoding::encode(path);
+                format!("index.html?file={}", encoded_path)
+            }
+            None => "index.html".to_string(),
         }
-        None => "index.html".to_string()
     };
 
     let window = WebviewWindowBuilder::new(
@@ -921,7 +986,10 @@ async fn create_new_window(app: tauri::AppHandle, file_path: Option<String>) -> 
     .build()
     .map_err(|e| e.to_string())?;
 
-    window.set_focus().map_err(|e| e.to_string())?;
+    let focus_result = window.set_focus();
+    if !defer_open {
+        focus_result.map_err(|e| e.to_string())?;
+    }
 
     Ok(window_label)
 }

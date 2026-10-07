@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
 
 export interface TabTransferPayload {
   file_path: string;
@@ -13,6 +14,39 @@ export function useWindowManager() {
     return invoke<string>('create_new_window', {
       filePath: filePath || null,
     });
+  };
+
+  const closeWindow = async (label: string): Promise<void> => {
+    const window = await WebviewWindow.getByLabel(label);
+    await window?.close();
+  };
+
+  const createTransferWindow = async (): Promise<string> => {
+    const ready = new Set<string>();
+    let notifyReady: (() => void) | undefined;
+    const unlisten = await listen<string>('transfer-window-ready', event => {
+      ready.add(event.payload);
+      notifyReady?.();
+    });
+    let label: string | undefined;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      label = await invoke<string>('create_new_window', { filePath: null, deferOpen: true });
+      const target = label;
+      if (!ready.has(target)) {
+        await new Promise<void>((resolve, reject) => {
+          notifyReady = () => { if (ready.has(target)) resolve(); };
+          timeout = setTimeout(() => reject(new Error('Transfer window did not become ready')), 15000);
+        });
+      }
+      return target;
+    } catch (error) {
+      if (label) await closeWindow(label);
+      throw error;
+    } finally {
+      clearTimeout(timeout);
+      unlisten();
+    }
   };
 
   const getFilePathFromUrl = (): string | null => {
@@ -85,6 +119,8 @@ export function useWindowManager() {
 
   return {
     createNewWindow,
+    createTransferWindow,
+    closeWindow,
     getFilePathFromUrl,
     getAllWindows,
     getCurrentWindowLabel,

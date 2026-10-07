@@ -5,6 +5,7 @@ import { save } from '@tauri-apps/plugin-dialog';
 import { wouldTruncateDocument } from '../utils/save-guard';
 import { atomicWriteTextFile } from '../utils/atomic-write';
 import { auditShrink } from '../utils/save-audit';
+import { captureSaveState, completeSave } from '../utils/save-state';
 import type { Tab } from './useTabs';
 
 /** A dirty tab together with the pane that holds it. */
@@ -64,6 +65,11 @@ export function useCloseConfirmation(options: UseCloseConfirmationOptions): UseC
 
   const processNextTab = (): void => {
     if (tabsToSave.value.length === 0) {
+      // A previously processed tab may have been edited while another saved.
+      tabsToSave.value = collectUnsavedTabs().filter(({ tab }) => tab.hasChanges);
+      tabsToSaveCount.value += tabsToSave.value.length;
+    }
+    if (tabsToSave.value.length === 0) {
       // All tabs processed, close the window
       showSaveConfirmDialog.value = false;
       currentTabToSave.value = null;
@@ -92,6 +98,7 @@ export function useCloseConfirmation(options: UseCloseConfirmationOptions): UseC
         onSaveFailed?.(tab);
         return false;
       }
+      const state = captureSaveState(tab, source);
 
       const markdown = source.trimEnd();
       if (wouldTruncateDocument(markdown, tab.originalMarkdown)) {
@@ -113,12 +120,7 @@ export function useCloseConfirmation(options: UseCloseConfirmationOptions): UseC
         auditShrink('close-save', filePath, markdown, tab.originalMarkdown);
         await atomicWriteTextFile(filePath, markdown);
 
-        // Update the tab
-        tab.filePath = filePath;
-        tab.fileName = filePath.split(/[/\\]/).pop() || 'Dokument';
-        tab.hasChanges = false;
-        tab.originalMarkdown = markdown;
-        return true;
+        return completeSave(state, filePath, markdown);
       }
 
       // User cancelled save dialog
@@ -132,12 +134,10 @@ export function useCloseConfirmation(options: UseCloseConfirmationOptions): UseC
   const handleSave = async (): Promise<void> => {
     if (!currentTabToSave.value) return;
 
-    const saved = await saveTabContent(
-      currentTabToSave.value.paneId,
-      currentTabToSave.value.tab,
-    );
+    const saving = currentTabToSave.value;
+    const saved = await saveTabContent(saving.paneId, saving.tab);
 
-    if (saved) {
+    if (saved && currentTabToSave.value === saving) {
       processNextTab();
     }
     // If not saved (user cancelled), stay on current dialog

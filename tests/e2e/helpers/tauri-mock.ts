@@ -24,6 +24,7 @@ export async function setupTauriMocks(
     openFilePath?: string | null;
     /** App version string */
     version?: string;
+    beforeRename?: (from: string, to: string) => Promise<void>;
   } = {},
 ): Promise<{
   /** Inspect current virtual FS state from a test */
@@ -52,8 +53,9 @@ export async function setupTauriMocks(
     fs[path] = content;
   });
 
-  await page.exposeFunction('__mockFsRename', (from: string, to: string): void => {
+  await page.exposeFunction('__mockFsRename', async (from: string, to: string): Promise<void> => {
     calls.push({ cmd: 'rename', args: { from, to } });
+    await opts.beforeRename?.(from, to);
     if (!(from in fs)) throw new Error(`ENOENT rename: ${from}`);
     fs[to] = fs[from];
     delete fs[from];

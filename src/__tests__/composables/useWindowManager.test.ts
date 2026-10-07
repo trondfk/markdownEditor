@@ -14,9 +14,14 @@ vi.mock('@tauri-apps/api/window', () => ({
   })),
 }));
 
+vi.mock('@tauri-apps/api/webviewWindow', () => ({
+  WebviewWindow: { getByLabel: vi.fn() },
+}));
+
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { useWindowManager } from '../../composables/useWindowManager';
 
 describe('useWindowManager', () => {
@@ -95,6 +100,57 @@ describe('useWindowManager', () => {
       const result = windowManager.getFilePathFromUrl();
 
       expect(result).toBe('/path/to/my file (1).md');
+    });
+  });
+
+  describe('createTransferWindow', () => {
+    it('creates a blank window and waits for its transfer listener before returning', async () => {
+      let ready!: (event: any) => void;
+      const unlisten = vi.fn();
+      vi.mocked(listen).mockImplementationOnce(async (_name, callback) => {
+        ready = callback;
+        return unlisten;
+      });
+      vi.mocked(invoke).mockResolvedValueOnce('target');
+      let finished = false;
+      const creating = windowManager.createTransferWindow().then(label => { finished = true; return label; });
+      await vi.waitFor(() => expect(invoke).toHaveBeenCalledWith('create_new_window', { filePath: null, deferOpen: true }));
+      expect(finished).toBe(false);
+      ready({ payload: 'other-window' });
+      await Promise.resolve();
+      expect(finished).toBe(false);
+      ready({ payload: 'target' });
+      expect(await creating).toBe('target');
+      expect(unlisten).toHaveBeenCalledOnce();
+    });
+
+    it('handles readiness arriving before the window creation command returns', async () => {
+      let ready!: (event: any) => void;
+      const unlisten = vi.fn();
+      vi.mocked(listen).mockImplementationOnce(async (_name, callback) => { ready = callback; return unlisten; });
+      vi.mocked(invoke).mockImplementationOnce(async () => {
+        ready({ payload: 'target' });
+        return 'target';
+      });
+      expect(await windowManager.createTransferWindow()).toBe('target');
+      expect(unlisten).toHaveBeenCalledOnce();
+    });
+
+    it('closes an unready blank window and releases its readiness listener on timeout', async () => {
+      vi.useFakeTimers();
+      try {
+        const unlisten = vi.fn();
+        const close = vi.fn(async () => {});
+        vi.mocked(listen).mockResolvedValueOnce(unlisten);
+        vi.mocked(invoke).mockResolvedValueOnce('target');
+        vi.mocked(WebviewWindow.getByLabel).mockResolvedValueOnce({ close } as any);
+        const rejected = expect(windowManager.createTransferWindow()).rejects.toThrow('did not become ready');
+        await vi.advanceTimersByTimeAsync(15000);
+        await rejected;
+        expect(WebviewWindow.getByLabel).toHaveBeenCalledWith('target');
+        expect(close).toHaveBeenCalledOnce();
+        expect(unlisten).toHaveBeenCalledOnce();
+      } finally { vi.useRealTimers(); }
     });
   });
 

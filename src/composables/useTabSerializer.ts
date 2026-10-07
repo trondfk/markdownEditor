@@ -45,9 +45,10 @@ export function useTabSerializer(options: UseTabSerializerOptions): UseTabSerial
       if (override !== null) return override;
     }
 
-    // Markdown-first (large) tabs hold their source in pendingMarkdown; their
-    // cached HTML is empty by design.
-    if (isMarkdownFirst(tab)) return tab.pendingMarkdown ?? null;
+    // An inactive editor's HTML or debounced lazy cache may lag the source.
+    if (!isActive && tab.markdown !== undefined) return tab.markdown;
+
+    if (isMarkdownFirst(tab)) return tab.markdown ?? tab.pendingMarkdown ?? null;
 
     if (isActive) {
       const html = getMountedEditorHtml();

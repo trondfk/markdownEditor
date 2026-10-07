@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { ref, computed } from 'vue';
 import type { Tab } from '../../composables/useTabs';
+import { setDocumentMarkdown } from '../../utils/save-state';
 
 // ============================================================
 // Mocks — must be hoisted above imports
@@ -457,6 +458,234 @@ describe('useFileOperations', () => {
 
       expect(tabs.value[0].hasChanges).toBe(false);
       expect(tabs.value[0].filePath).toBe('/test/file.md');
+    });
+  });
+
+  describe('edits and tab changes during save', () => {
+    const pauseRename = () => {
+      const files = new Map<string, string>();
+      let release!: () => void;
+      let started!: () => void;
+      const pending = new Promise<void>(resolve => { release = resolve; });
+      const entered = new Promise<void>(resolve => { started = resolve; });
+      mockWriteTextFile.mockImplementation(async (path: string, content: string) => {
+        files.set(path, content);
+      });
+      mockReadTextFile.mockImplementation(async (path: string) => files.get(path) ?? '# hello');
+      mockRename.mockImplementation(async (from: string, to: string) => {
+        started();
+        await pending;
+        files.set(to, files.get(from)!);
+        files.delete(from);
+      });
+      return { files, entered, release };
+    };
+
+    it('marks the merged document clean when the merge itself is successfully written', async () => {
+      const { options, tabs } = makeOptions();
+      const paused = pauseRename();
+      paused.files.set('/test/file.md', 'External content');
+      const saving = useFileOperations({
+        ...options,
+        getEditorHtml: () => tabs.value[0].content,
+        onPreSaveConflict: async () => {
+          tabs.value[0].content = '<p>Merged</p>';
+          return 'md:<p>Merged</p>';
+        },
+      }).saveFile();
+      await paused.entered;
+      paused.release();
+      await saving;
+      expect(paused.files.get('/test/file.md')).toBe('md:<p>Merged</p>');
+      expect(tabs.value[0].content).toBe('<p>Merged</p>');
+      expect(tabs.value[0].hasChanges).toBe(false);
+      expect(tabs.value[0].originalMarkdown).toBe('md:<p>Merged</p>');
+    });
+
+    it('keeps newer visual edits in memory and dirty after the older snapshot is saved', async () => {
+      const { options, tabs } = makeOptions();
+      options.getEditorHtml.mockImplementation(() => tabs.value[0].content);
+      const paused = pauseRename();
+      const saving = useFileOperations(options).saveFile();
+      await paused.entered;
+
+      tabs.value[0].content = '<p>hello plus recent work</p>';
+      setDocumentMarkdown(tabs.value[0], 'md:<p>hello plus recent work</p>');
+      paused.release();
+      await saving;
+
+      expect(paused.files.get('/test/file.md')).toBe('md:<p>hello</p>');
+      expect.soft(tabs.value[0].content).toBe('<p>hello plus recent work</p>');
+      expect.soft(tabs.value[0].hasChanges).toBe(true);
+      expect(tabs.value[0].originalMarkdown).toBe('md:<p>hello</p>');
+    });
+
+    it('does not restore a previous path when the document changes path during saving', async () => {
+      const { options, tabs } = makeOptions();
+      const paused = pauseRename();
+      const saving = useFileOperations(options).saveFile();
+      await paused.entered;
+      tabs.value[0].filePath = '/test/new-location.md';
+      tabs.value[0].fileName = 'new-location.md';
+      tabs.value[0].hasChanges = true;
+      paused.release();
+      await saving;
+
+      expect(paused.files.get('/test/file.md')).toBe('md:<p>hello</p>');
+      expect(tabs.value[0].filePath).toBe('/test/new-location.md');
+      expect(tabs.value[0].originalMarkdown).toBe('# hello');
+      expect(tabs.value[0].hasChanges).toBe(true);
+    });
+
+    it('leaves a newer successful Save As clean when the old save completes last', async () => {
+      const { options, tabs } = makeOptions();
+      options.getEditorHtml.mockImplementation(() => tabs.value[0].content);
+      const paused = pauseRename();
+      // Only the old path is held; the new path may finish independently.
+      const rename = mockRename.getMockImplementation()!;
+      mockRename.mockImplementation(async (from: string, to: string) => {
+        if (to === '/test/file.md') return rename(from, to);
+        paused.files.set(to, paused.files.get(from)!);
+        paused.files.delete(from);
+      });
+      const operations = useFileOperations(options);
+      const oldSave = operations.saveFile();
+      await paused.entered;
+      tabs.value[0].content = '<p>New version</p>';
+      setDocumentMarkdown(tabs.value[0], 'md:<p>New version</p>');
+      mockSaveDialog.mockResolvedValue('/test/new.md');
+      await operations.saveFileAs();
+      expect(tabs.value[0].hasChanges).toBe(false);
+      expect(paused.files.get('/test/new.md')).toBe('md:<p>New version</p>');
+      const saved = { ...tabs.value[0] };
+      paused.release();
+      await oldSave;
+      expect(paused.files.get('/test/file.md')).toBe('md:<p>hello</p>');
+      expect({ ...tabs.value[0] }).toEqual(saved);
+    });
+
+    it('keeps edits made after the merge dirty when the merged snapshot finishes writing', async () => {
+      const { options, tabs } = makeOptions();
+      const paused = pauseRename();
+      paused.files.set('/test/file.md', 'External');
+      const saving = useFileOperations({ ...options, onPreSaveConflict: async () => 'Merged' }).saveFile();
+      await paused.entered;
+      setDocumentMarkdown(tabs.value[0], 'Newer than merge');
+      paused.release();
+      await saving;
+      expect(paused.files.get('/test/file.md')).toBe('Merged');
+      expect(tabs.value[0].originalMarkdown).toBe('Merged');
+      expect(tabs.value[0].markdown).toBe('Newer than merge');
+      expect(tabs.value[0].hasChanges).toBe(true);
+    });
+
+    it('does not rebind an older conflict save to a newer successful Save As', async () => {
+      const { options, tabs } = makeOptions();
+      const paused = pauseRename();
+      paused.files.set('/test/file.md', 'External');
+      const rename = mockRename.getMockImplementation()!;
+      mockRename.mockImplementation(async (from: string, to: string) => {
+        if (to === '/test/file.md') return rename(from, to);
+        paused.files.set(to, paused.files.get(from)!);
+        paused.files.delete(from);
+      });
+      let merge!: (source: string) => void;
+      let started!: () => void;
+      const waiting = new Promise<void>(resolve => { started = resolve; });
+      const operations = useFileOperations({ ...options, onPreSaveConflict: async () => {
+        started();
+        return new Promise<string>(resolve => { merge = resolve; });
+      } });
+      const older = operations.saveFile();
+      await waiting;
+      mockSaveDialog.mockResolvedValue('/test/new.md');
+      await operations.saveFileAs();
+      const saved = { ...tabs.value[0] };
+      expect(saved.hasChanges).toBe(false);
+      merge('Obsolete merge');
+      await older;
+      expect({ ...tabs.value[0] }).toEqual(saved);
+      expect(paused.files.get('/test/file.md')).toBe('External');
+    });
+
+    it('does not accept the merged source as saved when its disk write fails', async () => {
+      const { options, tabs } = makeOptions();
+      const paused = pauseRename();
+      paused.files.set('/test/file.md', 'External');
+      mockRename.mockRejectedValueOnce(new Error('rename failed'));
+      await useFileOperations({ ...options, onPreSaveConflict: async () => 'Merged' }).saveFile();
+      expect(paused.files.get('/test/file.md')).toBe('External');
+      expect(tabs.value[0].originalMarkdown).toBe('# hello');
+      expect(tabs.value[0].markdown).toBe('Merged');
+      expect(tabs.value[0].hasChanges).toBe(true);
+    });
+
+    it('updates the original document when tabs are reordered during a write', async () => {
+      const { options, tabs } = makeOptions();
+      const original = tabs.value[0];
+      const other = makeTab({ id: 'tab-2', filePath: '/test/other.md', content: '<p>other</p>' });
+      tabs.value.push(other);
+      const paused = pauseRename();
+      const saving = useFileOperations(options).saveFile();
+      await paused.entered;
+      tabs.value.reverse();
+      paused.release();
+      await saving;
+
+      expect(original.hasChanges).toBe(false);
+      expect(original.originalMarkdown).toBe('md:<p>hello</p>');
+      expect(tabs.value[0].filePath).toBe('/test/other.md');
+      expect(tabs.value[0].content).toBe('<p>other</p>');
+      expect(tabs.value[0].hasChanges).toBe(true);
+    });
+
+    it('does not update a different pane when focus changes during a write', async () => {
+      const original = ref([makeTab()]);
+      const other = ref([makeTab({ id: 'tab-2', filePath: '/test/other.md', content: '<p>other</p>' })]);
+      const focus = ref('left');
+      const currentTabs = computed(() => focus.value === 'left' ? original.value : other.value);
+      const { options } = makeOptions();
+      const paused = pauseRename();
+      const saving = useFileOperations({
+        ...options,
+        tabs: currentTabs,
+        activeTabId: computed(() => currentTabs.value[0].id),
+        activeTab: computed(() => currentTabs.value[0]),
+        getEditorHtml: () => currentTabs.value[0].content,
+      }).saveFile();
+      await paused.entered;
+      focus.value = 'right';
+      paused.release();
+      await saving;
+
+      expect(original.value[0].hasChanges).toBe(false);
+      expect(other.value[0].filePath).toBe('/test/other.md');
+      expect(other.value[0].content).toBe('<p>other</p>');
+      expect(other.value[0].hasChanges).toBe(true);
+    });
+
+    it('saves the requested document if the active tab changes while Save As asks for a path', async () => {
+      let selectPath!: (path: string) => void;
+      mockSaveDialog.mockImplementation(() => new Promise<string>(resolve => { selectPath = resolve; }));
+      const { options, tabs } = makeOptions();
+      const original = tabs.value[0];
+      tabs.value.push(makeTab({ id: 'tab-2', filePath: '/test/other.md', content: '<p>other</p>' }));
+      const paused = pauseRename();
+      const saving = useFileOperations({
+        ...options,
+        activeTab: computed(() => tabs.value.find(tab => tab.id === options.activeTabId.value)!),
+        getEditorHtml: () => tabs.value.find(tab => tab.id === options.activeTabId.value)!.content,
+      }).saveFileAs();
+      options.activeTabId.value = 'tab-2';
+      selectPath('/test/saved-as.md');
+      await paused.entered;
+      paused.release();
+      await saving;
+
+      expect(paused.files.get('/test/saved-as.md')).toBe('md:<p>hello</p>');
+      expect(original.filePath).toBe('/test/saved-as.md');
+      expect(tabs.value[1].filePath).toBe('/test/other.md');
+      expect(tabs.value[1].hasChanges).toBe(true);
     });
   });
 

@@ -237,7 +237,7 @@ describe('useSplitView', () => {
       expect(tab?.content).toBe('<p>Updated content</p>');
     });
 
-    it('should update tab changes flag', () => {
+    it('does not clear unsaved content on a clean editor status', () => {
       const { createTab, leftPane } = useSplitView();
       const { updateTabChanges } = useSplitView();
 
@@ -249,7 +249,7 @@ describe('useSplitView', () => {
       expect(leftPane.value.tabs.find(t => t.id === tabId)?.hasChanges).toBe(true);
 
       updateTabChanges('left', tabId, false);
-      expect(leftPane.value.tabs.find(t => t.id === tabId)?.hasChanges).toBe(false);
+      expect(leftPane.value.tabs.find(t => t.id === tabId)?.hasChanges).toBe(true);
     });
   });
 

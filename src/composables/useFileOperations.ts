@@ -5,6 +5,7 @@ import { open as openExternal } from '@tauri-apps/plugin-shell';
 import { htmlToMarkdown, markdownToHtml, detectLineEnding, applyLineEnding, generateSlug } from '../utils/markdown-converter';
 import { atomicWriteTextFile } from '../utils/atomic-write';
 import { auditShrink } from '../utils/save-audit';
+import { captureSaveState, completeSave, setDocumentMarkdown, type SaveState } from '../utils/save-state';
 import { t } from '../i18n';
 import { aiCommands } from '../services/aiCommands';
 import type { Tab } from './useTabs';
@@ -128,6 +129,7 @@ export function useFileOperations(options: UseFileOperationsOptions): UseFileOpe
       tabs.value[activeIdx].content = htmlContent;
       tabs.value[activeIdx].hasChanges = false;
       tabs.value[activeIdx].originalMarkdown = fileContent;
+      setDocumentMarkdown(tabs.value[activeIdx], fileContent);
       tabs.value[activeIdx].largeFile = isLarge || undefined;
       tabs.value[activeIdx].pendingMarkdown = isLarge ? fileContent : undefined;
       if (!isLarge) setEditorContent(htmlContent);
@@ -137,6 +139,7 @@ export function useFileOperations(options: UseFileOperationsOptions): UseFileOpe
       const newTab = tabs.value.find(t => t.id === newTabId);
       if (newTab) {
         newTab.originalMarkdown = fileContent;
+        setDocumentMarkdown(newTab, fileContent);
         newTab.largeFile = isLarge || undefined;
         newTab.pendingMarkdown = isLarge ? fileContent : undefined;
       }
@@ -198,12 +201,12 @@ export function useFileOperations(options: UseFileOperationsOptions): UseFileOpe
     }
   };
 
-  const writeAndUpdateTab = async (filePath: string): Promise<void> => {
+  const prepareSave = () => {
+    const tab = tabs.value.find(t => t.id === activeTabId.value);
+    if (!tab) return null;
     // When in code view, getMarkdownOverride() returns the raw markdown directly —
     // avoids the empty-content bug caused by SplitContainer being unmounted.
     const markdownOverride = getMarkdownOverride?.() ?? null;
-    // Only used to refresh the cached tab HTML after a visual-mode save, never
-    // as the source of the write.
     const html = markdownOverride === null ? getEditorHtml() : null;
 
     // The text to write comes from the serializer, which answers null when no
@@ -214,59 +217,47 @@ export function useFileOperations(options: UseFileOperationsOptions): UseFileOpe
       ? getSaveMarkdown()
       : (markdownOverride ?? htmlToMarkdown(html!));
     if (source === null) {
-      console.error('[save] no editor could supply content for', filePath);
+      console.error('[save] no editor could supply content for', tab.fileName);
       onSaveFailed?.();
-      return;
+      return null;
     }
 
     let markdown = source.trimEnd();
 
-    const tabIndex = findActiveTabIndex();
-
     // Preserve original line endings if we have the original content
-    if (tabIndex !== -1 && tabs.value[tabIndex].originalMarkdown) {
-      const originalLineEnding = detectLineEnding(tabs.value[tabIndex].originalMarkdown!);
+    if (tab.originalMarkdown) {
+      const originalLineEnding = detectLineEnding(tab.originalMarkdown);
       markdown = applyLineEnding(markdown, originalLineEnding);
     }
+    return { state: captureSaveState(tab, markdown), markdown: markdown.trimEnd() };
+  };
 
-    markdown = markdown.trimEnd();
+  const writeAndUpdateTab = async (filePath: string, prepared: { state: SaveState; markdown: string }): Promise<void> => {
+    let { state } = prepared;
+    const { tab } = state;
+    let { markdown } = prepared;
 
     // Pre-save conflict check
-    let mergedContentApplied = false;
-    if (tabIndex !== -1 && onPreSaveConflict) {
-      const diskContent = await checkPreSaveConflict(filePath, tabs.value[tabIndex].originalMarkdown);
+    if (onPreSaveConflict) {
+      const diskContent = await checkPreSaveConflict(filePath, tab.originalMarkdown);
       if (diskContent !== null) {
         const decision = await onPreSaveConflict(filePath, diskContent, markdown);
         if (decision === 'cancel') return;
+        if (tab.filePath !== state.filePath) return;
         // If user applied a manual merge, use the merged content instead.
-        // The conflict handler already called reloadTabContent to update the editor —
-        // skip the tab.content = html overwrite below so the merged view isn't reverted.
+        // The merged source becomes the snapshot actually written to disk.
         if (decision !== 'save') {
           markdown = decision;
-          mergedContentApplied = true;
+          state = captureSaveState(tab, markdown);
         }
       }
     }
 
-    if (tabIndex !== -1) {
-      auditShrink('manual-save', filePath, markdown, tabs.value[tabIndex].originalMarkdown);
-    }
+    auditShrink('manual-save', filePath, markdown, tab.originalMarkdown);
 
     await atomicWriteFile(filePath, markdown);
 
-    if (tabIndex !== -1) {
-      tabs.value[tabIndex].filePath = filePath;
-      tabs.value[tabIndex].fileName = extractFileName(filePath);
-      tabs.value[tabIndex].hasChanges = false;
-      // Only update cached HTML when saving from visual mode — in code view the HTML
-      // will be regenerated from the saved markdown when switching back to visual mode.
-      // Skip when merged content was applied: the conflict handler already set tab.content
-      // via reloadTabContent; overwriting it here with pre-dialog html would revert the editor.
-      if (html !== null && !mergedContentApplied) {
-        tabs.value[tabIndex].content = html;
-      }
-      tabs.value[tabIndex].originalMarkdown = markdown;
-    }
+    completeSave(state, filePath, markdown);
 
     // Tell host to start watching this path (no-op if already watched).
     onAfterSave?.(filePath, markdown);
@@ -274,13 +265,16 @@ export function useFileOperations(options: UseFileOperationsOptions): UseFileOpe
 
   const saveFile = async (): Promise<void> => {
     try {
-      let filePath = currentFile.value;
-      const tabIndex = findActiveTabIndex();
+      const tab = tabs.value.find(t => t.id === activeTabId.value);
+      if (!tab) return;
+      let filePath = tab.filePath;
 
       // Skip save if file exists and has no changes
-      if (filePath && tabIndex !== -1 && !tabs.value[tabIndex].hasChanges) {
+      if (filePath && !tab.hasChanges) {
         return;
       }
+      const prepared = prepareSave();
+      if (!prepared) return;
 
       if (!filePath) {
         filePath = await save({
@@ -290,7 +284,7 @@ export function useFileOperations(options: UseFileOperationsOptions): UseFileOpe
       }
 
       if (filePath) {
-        await writeAndUpdateTab(filePath);
+        await writeAndUpdateTab(filePath, prepared);
       }
     } catch (error) {
       console.error('Error saving file:', error);
@@ -299,14 +293,16 @@ export function useFileOperations(options: UseFileOperationsOptions): UseFileOpe
 
   const saveFileAs = async (): Promise<void> => {
     try {
-      const oldPath = currentFile.value;
+      const prepared = prepareSave();
+      if (!prepared) return;
+      const oldPath = prepared.state.filePath;
       const filePath = await save({
         filters: [{ name: 'Markdown', extensions: ['md'] }],
         defaultPath: oldPath?.split(/[/\\]/).pop() || 'dokument.md',
       });
 
       if (filePath) {
-        await writeAndUpdateTab(filePath);
+        await writeAndUpdateTab(filePath, prepared);
         // Migrate AI metadata (sessions, access map, snapshots) to the new path.
         if (oldPath && oldPath !== filePath) {
           await Promise.all([

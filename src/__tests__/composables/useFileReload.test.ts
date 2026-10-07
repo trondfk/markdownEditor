@@ -266,6 +266,17 @@ describe('useFileReload', () => {
   });
 
   describe('markdown-first tabs (issue #129)', () => {
+    it('applies an unsaved merge without replacing the successful disk baseline', () => {
+      vi.mocked(markdownToHtml).mockReturnValueOnce('<p>Merged source</p>');
+      const { reloadTabContent } = createReload();
+      reloadTabContent('/test/file.md', 'Merged source', false);
+      expect(mockTab.content).toBe('<p>Merged source</p>');
+      expect(mockTab.markdown).toBe('Merged source');
+      expect(mockTab.originalMarkdown).toBe('old content');
+      expect(mockTab.hasChanges).toBe(true);
+      expect(mockTab.editRevision).toBe(1);
+    });
+
     it('reloads a markdown-first tab without HTML conversion', () => {
       mockTab.largeFile = true;
       mockTab.pendingMarkdown = '# old';

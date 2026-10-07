@@ -3,7 +3,7 @@ import { ref, provide, computed, watchEffect, watch, onMounted, onUnmounted, nex
 import { invoke } from '@tauri-apps/api/core';
 import { getVersion } from '@tauri-apps/api/app';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import { listen, emit, type UnlistenFn } from '@tauri-apps/api/event';
 import { copyFile, exists, readTextFile, remove } from '@tauri-apps/plugin-fs';
 import { open } from '@tauri-apps/plugin-dialog';
 import { htmlToMarkdown, detectLineEnding, applyLineEnding, markdownToHtml } from './utils/markdown-converter';
@@ -57,6 +57,7 @@ import { useFileOperations } from './composables/useFileOperations';
 import { useCloseConfirmation } from './composables/useCloseConfirmation';
 import { wouldTruncateDocument } from './utils/save-guard';
 import { atomicWriteTextFile } from './utils/atomic-write';
+import { captureSaveState, completeSave, setDocumentMarkdown } from './utils/save-state';
 import { auditShrink } from './utils/save-audit';
 import { ratioFromPointer } from './utils/resize';
 import { useWindowManager } from './composables/useWindowManager';
@@ -279,7 +280,7 @@ const createDocument = async (kind: 'plain' | 'marp') => {
   if (splitEditorActive.value && activeTab.value) {
     // eslint-disable-next-line @typescript-eslint/no-use-before-define
     activeTab.value.content = exitSplitEditor();
-    activeTab.value.hasChanges = true;
+    setDocumentMarkdown(activeTab.value, htmlToMarkdown(activeTab.value.content));
   }
   if (kind === 'marp') {
     createNewTab(null, markdownToHtml(buildMarpSeed()));
@@ -346,7 +347,7 @@ const handlePreSaveConflictLoadExternal = () => {
 
 const handlePreSaveConflictMerge = (mergedContent: string) => {
   // eslint-disable-next-line @typescript-eslint/no-use-before-define
-  reloadTabContent(preSaveConflictFilePath.value, mergedContent);
+  reloadTabContent(preSaveConflictFilePath.value, mergedContent, false);
   showPreSaveConflictModal.value = false;
   // Pass merged content to writeAndUpdateTab — it will use it as the save content
   preSaveConflictResolver?.(mergedContent);
@@ -843,9 +844,7 @@ const {
     }
   },
   markAsChanged: () => {
-    if (activeTab.value) {
-      activeTab.value.hasChanges = true;
-    }
+    if (activeTab.value) setDocumentMarkdown(activeTab.value, codeContent.value);
   },
   forceConvertOnExit: () => isMarkdownFirst(activeTab.value),
 });
@@ -971,7 +970,7 @@ watch(activeTabId, (_newId, oldId) => {
     const oldIndex = tabs.value.findIndex(t => t.id === oldId);
     if (oldIndex !== -1) {
       tabs.value[oldIndex].content = markdownToHtml(splitMarkdownSource.value);
-      tabs.value[oldIndex].hasChanges = true;
+      setDocumentMarkdown(tabs.value[oldIndex], splitMarkdownSource.value);
     }
   }
   enterSplitEditor(activeTab.value?.content || '<p></p>');
@@ -1029,7 +1028,7 @@ const toggleSplitEditor = async () => {
   const html = exitSplitEditor();
   if (activeTab.value) {
     activeTab.value.content = html;
-    activeTab.value.hasChanges = true;
+    setDocumentMarkdown(activeTab.value, htmlToMarkdown(activeTab.value.content));
   }
   isLoadingContent.value = true;
   splitEditorActive.value = false;
@@ -1039,9 +1038,7 @@ const toggleSplitEditor = async () => {
 
 const handleSplitMarkdownInput = (value: string) => {
   onSplitMarkdownInput(value);
-  if (activeTab.value) {
-    activeTab.value.hasChanges = true;
-  }
+  if (activeTab.value) setDocumentMarkdown(activeTab.value, value);
 };
 
 // Fires only for genuine in-preview edits (Mermaid diagram apply, manual node
@@ -1050,9 +1047,7 @@ const handleSplitMarkdownInput = (value: string) => {
 const onSplitPreviewChanged = (changed: boolean) => {
   if (!changed || !splitEditorActive.value) return;
   syncSplitFromVisual(splitPreviewLatestHtml.value);
-  if (activeTab.value) {
-    activeTab.value.hasChanges = true;
-  }
+  if (activeTab.value) setDocumentMarkdown(activeTab.value, splitMarkdownSource.value);
 };
 
 // ============ Current Document Search ============
@@ -1180,7 +1175,7 @@ const switchToTabFromSplitEditor = async (tabId: string) => {
 const closeTabFromSplitEditor = async (tabId: string) => {
   if (tabId === activeTabId.value && activeTab.value && splitSourceTabId.value === tabId) {
     activeTab.value.content = exitSplitEditor();
-    activeTab.value.hasChanges = true;
+    setDocumentMarkdown(activeTab.value, htmlToMarkdown(activeTab.value.content));
   }
   handleCloseTabRequest(activePaneId.value, tabId);
   await nextTick();
@@ -1618,6 +1613,8 @@ const saveTabFromPane = async (paneId: string, tabId: string) => {
   // rather than writing the empty-document placeholder over the file.
   const source = getTabMarkdown(paneId, tab);
   if (source === null) return;
+  const state = captureSaveState(tab, source);
+  const filePath = tab.filePath;
 
   try {
     let markdown = source.trimEnd();
@@ -1637,17 +1634,16 @@ const saveTabFromPane = async (paneId: string, tabId: string) => {
     // The guard above only catches writes that end up empty. A write that keeps
     // some text but drops most of it looks identical to a normal edit from here,
     // so record it rather than block it and leave evidence behind.
-    auditShrink('auto-save', tab.filePath, markdown, tab.originalMarkdown);
+    auditShrink('auto-save', filePath, markdown, tab.originalMarkdown);
 
-    markSaveStart(tab.filePath);
-    await atomicWriteTextFile(tab.filePath, markdown);
-    markSaveEnd(tab.filePath, markdown);
+    markSaveStart(filePath);
+    await atomicWriteTextFile(filePath, markdown);
+    markSaveEnd(filePath, markdown);
 
     // Update tab state. tab.content is left alone: EditorPane keeps it current,
     // and overwriting it here is what turned a bad serialization into a blank
     // on-screen document.
-    tab.hasChanges = false;
-    tab.originalMarkdown = markdown;
+    completeSave(state, filePath, markdown);
   } catch (error) {
     console.error('Auto-save failed:', error);
   }
@@ -1946,7 +1942,8 @@ onMounted(async () => {
   // Check for file path from URL query parameters (for new windows created via drag)
   const { getFilePathFromUrl } = useWindowManager();
   const urlFilePath = getFilePathFromUrl();
-  let hasExplicitFile = false;
+  const transferWindow = new URLSearchParams(window.location.search).get('transfer') === '1';
+  let hasExplicitFile = transferWindow;
 
   // Register before reading pending open state so macOS open-document events
   // cannot race past the frontend during cold start.
@@ -1964,7 +1961,7 @@ onMounted(async () => {
     console.log('[App] Opening file from URL:', urlFilePath);
     await nextTick();
     setTimeout(() => openFileWithCrossWindowCheck(urlFilePath), 100);
-  } else {
+  } else if (!transferWindow) {
     // Check for file path from CLI arguments (for main window / file associations)
     try {
       const filePath = await invoke<string | null>('get_open_file_path');
@@ -2015,6 +2012,7 @@ onMounted(async () => {
       markAsTransferred(payload.file_path);
       openFileWithCrossWindowCheck(payload.file_path);
     });
+    if (transferWindow) await emit('transfer-window-ready', currentWindowLabel);
   } catch (error) {
     console.error('Failed to listen for tab transfers:', error);
   }
@@ -2275,7 +2273,7 @@ onUnmounted(async () => {
             :markdown="activeTab?.pendingMarkdown ?? ''"
             :file-path="activeTab?.filePath ?? null"
             @update:markdown="(markdown: string) => { if (activeTab) activeTab.pendingMarkdown = markdown; }"
-            @update:has-changes="(changed: boolean) => { if (changed && activeTab) activeTab.hasChanges = true; }"
+            @update:has-changes="() => { if (activeTab) setDocumentMarkdown(activeTab, lazyMarkdownEditorRef?.getMarkdown() ?? activeTab.pendingMarkdown ?? ''); }"
             @editor-focus="(editor: TiptapEditor) => (editorInstance = editor)"
             @link-click="handleLinkClick"
           />

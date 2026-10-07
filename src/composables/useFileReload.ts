@@ -1,3 +1,4 @@
+import { setDocumentMarkdown, refreshDirtyState } from '../utils/save-state';
 import { ref, computed, type Ref, type ComputedRef } from 'vue';
 import { readTextFile } from '@tauri-apps/plugin-fs';
 import { markdownToHtml, htmlToMarkdown } from '../utils/markdown-converter';
@@ -99,7 +100,7 @@ export function useFileReload(options: UseFileReloadOptions) {
     },
   });
 
-  const reloadTabContent = (filePath: string, newContent: string) => {
+  const reloadTabContent = (filePath: string, newContent: string, saved = true) => {
     const result = findTabByFilePathSplit(filePath);
     if (!result) return;
 
@@ -107,8 +108,9 @@ export function useFileReload(options: UseFileReloadOptions) {
 
     if (tab.largeFile && tab.pendingMarkdown != null) {
       tab.pendingMarkdown = newContent;
-      tab.originalMarkdown = newContent;
-      tab.hasChanges = false;
+      setDocumentMarkdown(tab, newContent);
+      if (saved) tab.originalMarkdown = newContent;
+      refreshDirtyState(tab);
       fileWatcher.updateKnownContent(filePath, newContent);
       const isActiveTab = tab.id === pane.activeTabId && pane.id === activePaneId.value;
       if (isActiveTab) setCodeMarkdown?.(newContent);
@@ -123,8 +125,9 @@ export function useFileReload(options: UseFileReloadOptions) {
     const savedRatio = container ? getScrollRatio(container) : 0;
 
     tab.content = htmlContent;
-    tab.originalMarkdown = newContent;
-    tab.hasChanges = false;
+    setDocumentMarkdown(tab, newContent);
+    if (saved) tab.originalMarkdown = newContent;
+    refreshDirtyState(tab);
 
     fileWatcher.updateKnownContent(filePath, newContent);
 
