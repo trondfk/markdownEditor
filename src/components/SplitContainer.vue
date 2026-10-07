@@ -205,14 +205,19 @@ const handlePaneFocus = (paneId: string) => {
   setActivePane(paneId);
 };
 
-const getEditorContent = (paneId: string): string => {
+const getEditorContent = (paneId: string): string | null => {
   if (paneId === 'left' && leftPaneRef.value) {
     return leftPaneRef.value.getEditorContent();
   }
   if (paneId === 'right' && rightPaneRef.value) {
     return rightPaneRef.value.getEditorContent();
   }
-  return '';
+  return null;
+};
+
+const getEditorSource = (paneId: string) => {
+  const pane = paneId === 'left' ? leftPaneRef.value : paneId === 'right' ? rightPaneRef.value : null;
+  return pane?.getEditorSource() ?? null;
 };
 
 const setEditorContent = (paneId: string, content: string) => {
@@ -224,7 +229,7 @@ const setEditorContent = (paneId: string, content: string) => {
   }
 };
 
-const getActiveEditorContent = (): string => {
+const getActiveEditorContent = (): string | null => {
   return getEditorContent(activePaneId.value);
 };
 
@@ -280,6 +285,7 @@ const getActiveEditor = () => {
 
 defineExpose({
   getEditorContent,
+  getEditorSource,
   setEditorContent,
   getActiveEditorContent,
   setActiveEditorContent,

@@ -52,6 +52,7 @@ export function createDefaultPane(id: string): Pane {
       filePath: null,
       fileName: t.value.newDocument,
       content: EMPTY_TAB_CONTENT,
+      markdown: '',
       hasChanges: false,
       scrollTop: 0,
       originalMarkdown: null,

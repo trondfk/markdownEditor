@@ -178,7 +178,7 @@ watchEffect(() => {
 // ============ Tab Operations (with editor integration) ============
 const getEditorContent = () => {
   if (splitContainerRef.value) {
-    return splitContainerRef.value.getActiveEditorContent();
+    return splitContainerRef.value.getActiveEditorContent() ?? '<p></p>';
   }
   return '<p></p>';
 };
@@ -212,8 +212,7 @@ const getActiveMarkdownOverride = (): string | null => {
 const { getTabMarkdown } = useTabSerializer({
   activeTabId,
   activePaneId,
-  getActiveMarkdownOverride,
-  getMountedEditorHtml: () => splitContainerRef.value?.getActiveEditorContent() ?? null,
+  getEditorSource: (paneId) => splitContainerRef.value?.getEditorSource(paneId) ?? null,
   // eslint-disable-next-line @typescript-eslint/no-use-before-define
   isMarkdownFirst: (tab: Tab) => isMarkdownFirst(tab),
 });
@@ -362,7 +361,7 @@ const handlePreSaveConflictCancel = () => {
 
 // ============ Tab Close Confirmation ============
 const showTabCloseDialog = ref(false);
-const tabToClose = ref<{ id: string; paneId: string; fileName: string } | null>(null);
+const tabToClose = ref<{ id: string; paneId: string; fileName: string; tab: Tab } | null>(null);
 
 const closeTabAndCheckWindow = async (paneId: string, tabId: string) => {
   // Get the file path before closing to unregister it
@@ -406,7 +405,7 @@ const handleCloseTabRequest = (paneId: string, tabId: string) => {
   const tab = pane?.tabs.find(t => t.id === tabId);
 
   if (tab?.hasChanges) {
-    tabToClose.value = { id: tabId, paneId, fileName: tab.fileName };
+    tabToClose.value = { id: tabId, paneId, fileName: tab.fileName, tab };
     showTabCloseDialog.value = true;
     return;
   }
@@ -470,25 +469,18 @@ function handleTabCloseSaved(paneId: string) {
 }
 
 const handleTabCloseSave = async () => {
-  if (!tabToClose.value) return;
+  const request = tabToClose.value;
+  if (!request) return;
+  const { paneId, tab } = request;
+  const ownsTab = () => splitState.value.panes.some(p => p.id === paneId && p.tabs.includes(tab));
+  if (!ownsTab()) return;
 
-  const pane = splitState.value.panes.find(p => p.id === tabToClose.value!.paneId);
-  const tab = pane?.tabs.find(t => t.id === tabToClose.value!.id);
+  const saved = await saveFile({ tab, markdown: getTabMarkdown(paneId, tab) });
+  if (!saved || tabToClose.value !== request || !ownsTab() || tab.hasChanges) return;
 
-  if (tab) {
-    if (activeTabId.value !== tab.id || activePaneId.value !== tabToClose.value.paneId) {
-      splitState.value.activePaneId = tabToClose.value.paneId;
-      await switchToTab(tab.id);
-    }
-    await saveFile();
-    if (!tab.hasChanges) {
-      showTabCloseDialog.value = false;
-      const closePaneId = tabToClose.value.paneId;
-      const closeTabId = tabToClose.value.id;
-      tabToClose.value = null;
-      await closeTabAndCheckWindow(closePaneId, closeTabId);
-    }
-  }
+  showTabCloseDialog.value = false;
+  tabToClose.value = null;
+  await closeTabAndCheckWindow(paneId, tab.id);
 };
 
 const handleTabCloseDiscard = async () => {
@@ -536,7 +528,7 @@ const {
     const tab = getActiveTabForPane(activePaneId.value);
     return tab ? getTabMarkdown(activePaneId.value, tab) : null;
   },
-  onSaveFailed: () => showToastNotification(t.value.saveFailed(activeTab.value.fileName), 'warning'),
+  onSaveFailed: (tab) => showToastNotification(t.value.saveFailed(tab.fileName), 'warning'),
   setEditorContent,
   markSaveStart: (filePath: string) => markSaveStart(filePath),
   markSaveEnd: (filePath: string, content: string) => markSaveEnd(filePath, content),

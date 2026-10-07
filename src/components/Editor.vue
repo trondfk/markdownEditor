@@ -408,15 +408,19 @@ const parseTextTable = (text: string): string | null => {
 
 const props = withDefaults(defineProps<{
   modelValue?: string;
+  documentId?: string;
   filePath?: string | null;
   editable?: boolean;
 }>(), {
   editable: true,
 });
 
+// This identifies the document loaded by this keyed editor instance.
+const editorDocumentId = props.documentId;
+
 const emit = defineEmits<{
-  "update:modelValue": [value: string];
-  "update:hasChanges": [value: boolean];
+  "update:modelValue": [value: string, documentId: string | undefined];
+  "update:hasChanges": [value: boolean, documentId: string | undefined];
   "linkClick": [href: string];
 }>();
 
@@ -539,9 +543,9 @@ const editor = useEditor({
   ],
   onUpdate: ({ editor: ed }) => {
     const html = ed.getHTML();
-    emit("update:modelValue", html);
+    emit("update:modelValue", html, editorDocumentId);
     if (settingContentCount === 0) {
-      emit("update:hasChanges", html !== lastSavedHtml);
+      emit("update:hasChanges", html !== lastSavedHtml, editorDocumentId);
     }
     footnotes.consumePendingInsert(ed);
     // Defer image resolution to next frame to avoid conflicting with ProseMirror's
@@ -661,7 +665,7 @@ watch(
         // onUpdate skips hasChanges while the counter is up. Re-check against
         // the loaded snapshot so a paste+edit is not marked clean.
         if (editor.value) {
-          emit("update:hasChanges", editor.value.getHTML() !== lastSavedHtml);
+          emit("update:hasChanges", editor.value.getHTML() !== lastSavedHtml, editorDocumentId);
         }
       }, 200);
     }
@@ -918,6 +922,7 @@ async function insertImagesByPath(items: { path: string; alt: string }[]) {
 
 defineExpose({
   editor,
+  documentId: editorDocumentId,
   insertImagesByPath,
   getSearchTextMap,
   setSearchHighlights,

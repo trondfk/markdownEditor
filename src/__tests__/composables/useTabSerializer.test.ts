@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { ref } from 'vue';
 import type { Tab } from '../../composables/useTabs';
-import { useTabSerializer } from '../../composables/useTabSerializer';
+import { useTabSerializer, type UseTabSerializerOptions } from '../../composables/useTabSerializer';
 
 const makeTab = (overrides: Partial<Tab> = {}): Tab => ({
   id: 'tab-1',
@@ -15,18 +15,51 @@ const makeTab = (overrides: Partial<Tab> = {}): Tab => ({
 });
 
 const setup = (
-  overrides: Partial<Parameters<typeof useTabSerializer>[0]> = {},
-) =>
-  useTabSerializer({
+  overrides: Partial<UseTabSerializerOptions> & {
+    getActiveMarkdownOverride?: () => string | null;
+    getMountedEditorHtml?: () => string | null;
+  } = {},
+) => {
+  const getOverride = overrides.getActiveMarkdownOverride ?? (() => null);
+  const getHtml = overrides.getMountedEditorHtml ?? (() => '<h1>Title</h1><p>Body</p>');
+  return useTabSerializer({
     activeTabId: ref('tab-1'),
     activePaneId: ref('left'),
-    getActiveMarkdownOverride: () => null,
-    getMountedEditorHtml: () => '<h1>Title</h1><p>Body</p>',
+    getEditorSource: () => {
+      const markdown = getOverride();
+      if (markdown !== null) return { tabId: 'tab-1', markdown };
+      const html = getHtml();
+      return html === null ? null : { tabId: 'tab-1', html };
+    },
     isMarkdownFirst: () => false,
     ...overrides,
   });
+};
 
 describe('useTabSerializer', () => {
+  describe('close-save source ownership', () => {
+    it('prefers the pinned document Markdown while another editor is still mounted', () => {
+      const { getTabMarkdown } = setup({ getMountedEditorHtml: () => '<p>Other document</p>' });
+      const tab = makeTab({ markdown: 'Pinned unsaved work' });
+      expect(getTabMarkdown('left', tab)).toBe('Pinned unsaved work');
+      expect(tab.markdown).toBe('Pinned unsaved work');
+    });
+
+    it('does not accept a stale raw-source override just because the tab became active', () => {
+      const { getTabMarkdown } = setup({ getActiveMarkdownOverride: () => 'Other document' });
+      expect(getTabMarkdown('left', makeTab({ markdown: 'Pinned unsaved work' }))).toBe('Pinned unsaved work');
+    });
+
+    it('rejects a mounted source belonging to a different document when no canonical source is ready', () => {
+      const { getTabMarkdown } = setup({ getEditorSource: () => ({ tabId: 'other', html: '<p>Other work</p>' }) });
+      expect(getTabMarkdown('left', makeTab())).toBeNull();
+    });
+
+    it('honours authoritative empty content even while a stale editor is mounted', () => {
+      const { getTabMarkdown } = setup({ getMountedEditorHtml: () => '<p>Stale work</p>' });
+      expect(getTabMarkdown('left', makeTab({ markdown: '' }))).toBe('');
+    });
+  });
   describe('visual mode (WYSIWYG editor mounted)', () => {
     it('serializes the active tab from the live editor', () => {
       const { getTabMarkdown } = setup({

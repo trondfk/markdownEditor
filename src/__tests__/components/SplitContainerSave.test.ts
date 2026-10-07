@@ -72,6 +72,13 @@ describe('saving before tab transfer', () => {
     useSplitView().splitState.value = createDefaultSplitViewState();
   });
 
+  it('returns null when the requested editor pane is unavailable', () => {
+    const wrapper = mount(SplitContainer);
+    try {
+      expect(wrapper.vm.getEditorContent('right')).toBeNull();
+    } finally { wrapper.unmount(); }
+  });
+
   it('keeps newer edits and the source tab when they arrive during the save', async () => {
     const split = useSplitView();
     const tab = split.splitState.value.panes[0].tabs[0];

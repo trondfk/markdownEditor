@@ -462,6 +462,59 @@ describe('useFileOperations', () => {
   });
 
   describe('edits and tab changes during save', () => {
+    it('saves an explicit close target even when a different document is active', async () => {
+      const { options, tabs } = makeOptions({ markdown: 'Pinned A' });
+      const target = tabs.value[0];
+      const other = makeTab({ id: 'other', filePath: '/test/other.md', markdown: 'Unsaved B' });
+      tabs.value.push(other);
+      options.activeTabId.value = other.id;
+      const files = new Map<string, string>();
+      mockWriteTextFile.mockImplementation(async (path, content) => { files.set(path, content); });
+      mockReadTextFile.mockImplementation(async path => files.get(path));
+      mockRename.mockImplementation(async (from, to) => { files.set(to, files.get(from)!); files.delete(from); });
+      const operations = useFileOperations({ ...options, getSaveMarkdown: () => 'Unsaved B' });
+      await operations.saveFile({ tab: target, markdown: target.markdown! });
+      expect(files.get('/test/file.md')).toBe('Pinned A');
+      expect(files.has('/test/other.md')).toBe(false);
+      expect(target.hasChanges).toBe(false);
+      expect(tabs.value[1].hasChanges).toBe(true);
+    });
+
+    it.each([false, true])('does not mutate or report an explicit unavailable target saved (dirty=%s)', async hasChanges => {
+      const { options, tabs } = makeOptions({ hasChanges, markdown: 'Pinned work' });
+      const target = tabs.value[0];
+      const before = { ...target };
+      const saved = await useFileOperations(options).saveFile({ tab: target, markdown: null });
+      expect(saved).toBe(false);
+      expect(mockWriteTextFile).not.toHaveBeenCalled();
+      expect(mockSaveDialog).not.toHaveBeenCalled();
+      expect(target).toEqual(before);
+    });
+
+    it('retains the explicit document and baseline when its path dialog is cancelled', async () => {
+      const { options, tabs } = makeOptions({ filePath: null, originalMarkdown: null, markdown: 'Pinned work' });
+      const target = tabs.value[0];
+      mockSaveDialog.mockResolvedValueOnce(null);
+      const saved = await useFileOperations(options).saveFile({ tab: target, markdown: target.markdown! });
+      expect(saved).toBe(false);
+      expect(mockWriteTextFile).not.toHaveBeenCalled();
+      expect(target.filePath).toBeNull();
+      expect(target.originalMarkdown).toBeNull();
+      expect(target.markdown).toBe('Pinned work');
+      expect(target.hasChanges).toBe(true);
+    });
+
+    it('retains the explicit document and baseline when its write fails', async () => {
+      const { options, tabs } = makeOptions({ markdown: 'Pinned work' });
+      const target = tabs.value[0];
+      mockWriteTextFile.mockRejectedValueOnce(new Error('disk full'));
+      const saved = await useFileOperations(options).saveFile({ tab: target, markdown: target.markdown! });
+      expect(saved).toBe(false);
+      expect(target.originalMarkdown).toBe('# hello');
+      expect(target.markdown).toBe('Pinned work');
+      expect(target.hasChanges).toBe(true);
+    });
+
     const pauseRename = () => {
       const files = new Map<string, string>();
       let release!: () => void;

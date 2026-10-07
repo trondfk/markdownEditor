@@ -2,6 +2,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Tab } from '../../composables/useTabs';
 import type { UnsavedTab } from '../../composables/useCloseConfirmation';
 import { setDocumentMarkdown } from '../../utils/save-state';
+import { ref } from 'vue';
+import { useTabSerializer } from '../../composables/useTabSerializer';
 
 // Captures the close callback so a test can fire a window-close itself.
 const windowMocks = vi.hoisted(() => ({
@@ -238,6 +240,53 @@ describe('useCloseConfirmation', () => {
   });
 
   describe('save-on-quit never destroys a document', () => {
+    it('writes the pinned Markdown while focusing is pending and another document is mounted', async () => {
+      const tab = createMockTab({ id: 'target', filePath: '/target.md', markdown: 'Pinned work', content: '<p>Stale cache</p>', originalMarkdown: 'Old disk', hasChanges: true });
+      const activeTabId = ref('other');
+      let release!: () => void;
+      const ready = new Promise<void>(resolve => { release = resolve; });
+      const serializer = useTabSerializer({
+        activeTabId, activePaneId: ref('left'), isMarkdownFirst: () => false,
+        getEditorSource: () => ({ tabId: 'other', html: '<p>Other document</p>' }),
+      });
+      const close = useCloseConfirmation({
+        ...createMockOptions([{ paneId: 'left', tab }]),
+        getTabMarkdown: serializer.getTabMarkdown,
+        switchToTab: async (_pane, id) => { activeTabId.value = id; await ready; },
+      });
+      try {
+        await close.setupCloseHandler();
+        await requestClose();
+        await close.handleSave();
+        expect(fsMocks.files.get('/target.md')).toBe('Pinned work');
+        expect(tab.markdown).toBe('Pinned work');
+        expect(tab.originalMarkdown).toBe('Pinned work');
+        expect(tab.hasChanges).toBe(false);
+        expect(exit).toHaveBeenCalledOnce();
+      } finally { release(); }
+    });
+
+    it('does not write, mutate or exit when the mounted source belongs to another document', async () => {
+      const tab = createMockTab({ id: 'target', content: '<p>Unsaved work</p>', hasChanges: true });
+      const serializer = useTabSerializer({
+        activeTabId: ref('target'), activePaneId: ref('left'), isMarkdownFirst: () => false,
+        getEditorSource: () => ({ tabId: 'other', html: '<p>Other work</p>' }),
+      });
+      const close = useCloseConfirmation({ ...createMockOptions([{ paneId: 'left', tab }]), getTabMarkdown: serializer.getTabMarkdown });
+      await close.setupCloseHandler();
+      await requestClose();
+      await close.handleSave();
+      expect(fsMocks.files.size).toBe(0);
+      expect(tab.content).toBe('<p>Unsaved work</p>');
+      expect(tab.markdown).toBeUndefined();
+      expect(tab.editRevision).toBeUndefined();
+      expect(tab.originalMarkdown).toBeNull();
+      expect(tab.filePath).toBeNull();
+      expect(tab.hasChanges).toBe(true);
+      expect(exit).not.toHaveBeenCalled();
+      expect(close.currentTabToSave.value?.tab.id).toBe('target');
+    });
+
     it('does not exit or discard edits made while the close-save is writing', async () => {
       const tab = createMockTab({
         filePath: 'D:/notes/important.md',

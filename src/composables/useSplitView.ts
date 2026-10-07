@@ -182,6 +182,7 @@ export function useSplitView(): UseSplitViewReturn {
       filePath,
       fileName: actualFileName,
       content,
+      markdown: htmlToMarkdown(content),
       hasChanges: false,
       scrollTop: 0,
       originalMarkdown: null,

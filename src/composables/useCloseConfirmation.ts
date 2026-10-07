@@ -25,9 +25,8 @@ export interface UseCloseConfirmationOptions {
    */
   collectUnsavedTabs: () => UnsavedTab[];
   /**
-   * Serializes a tab to markdown, or returns null when no mounted editor can
-   * supply its text. Never falls back to a placeholder: a null here means the
-   * save must be skipped, not that the document is empty.
+   * Resolves a tab's authoritative or verified editor source. A null result
+   * skips the save and keeps the close operation pending.
    */
   getTabMarkdown: (paneId: string, tab: Tab) => string | null;
   /** Focuses a tab, switching panes when the tab lives in the other one. */
@@ -81,10 +80,9 @@ export function useCloseConfirmation(options: UseCloseConfirmationOptions): UseC
     currentTabToSave.value = tabsToSave.value.shift() || null;
 
     if (currentTabToSave.value) {
-      // Switch to the tab so user can see what they're saving. Focusing it also
-      // mounts its editor, which is what lets the serializer read live text for
-      // a tab that was sitting in the unfocused pane.
-      switchToTab(currentTabToSave.value.paneId, currentTabToSave.value.tab.id);
+      // Focus is for display; serialization independently validates its source.
+      switchToTab(currentTabToSave.value.paneId, currentTabToSave.value.tab.id)
+        .catch(error => console.error('Error focusing tab during close:', error));
     }
   };
 

@@ -175,7 +175,7 @@ export async function setupTauriMocks(
 
           // ── dialog plugin ──────────────────────────────────────────
           if (cmd === 'plugin:dialog|open') {
-            return null; // no file selected
+            return (window as Record<string, unknown>).__mockDialogOpenPath ?? null;
           }
           if (cmd === 'plugin:dialog|save') {
             // Read the mutable path variable (overridable from tests via page.evaluate)

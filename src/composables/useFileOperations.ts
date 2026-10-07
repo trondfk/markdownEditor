@@ -22,14 +22,12 @@ export interface UseFileOperationsOptions {
   /** Optional override — when provided, used directly as markdown instead of converting from HTML.
    *  Use this to pass raw codeContent when saving from code view. */
   getMarkdownOverride?: () => string | null;
-  /** Serializes the active tab for writing, or null when no mounted editor can
-   *  speak for it. Preferred over getEditorHtml, which answers with the
-   *  empty-document placeholder in that case: a null here aborts the save
-   *  instead of writing that placeholder over a real file. */
+  /** Resolves the active document's authoritative or verified editor source.
+   *  A null result aborts the save without falling back to placeholder HTML. */
   getSaveMarkdown?: () => string | null;
   /** Surfaces a save that had to be abandoned because the text could not be
    *  resolved, so the user is not left believing the file was written. */
-  onSaveFailed?: () => void;
+  onSaveFailed?: (tab: Tab) => void;
   setEditorContent: (content: string) => void;
   markSaveStart?: (filePath: string) => void;
   markSaveEnd?: (filePath: string, content: string) => void;
@@ -57,12 +55,17 @@ export interface UseFileOperationsReturn {
   pendingExternalUrl: Ref<string>;
   openFile: () => Promise<void>;
   openFileFromPath: (filePath: string) => Promise<void>;
-  saveFile: () => Promise<void>;
+  saveFile: (target?: DocumentSaveTarget) => Promise<boolean>;
   saveFileAs: () => Promise<void>;
   handleLinkClick: (href: string) => void;
   confirmExternalLink: () => Promise<void>;
   cancelExternalLink: () => void;
   openFileInNewTab: (relativePath: string) => Promise<void>;
+}
+
+export interface DocumentSaveTarget {
+  tab: Tab;
+  markdown: string | null;
 }
 
 export function useFileOperations(options: UseFileOperationsOptions): UseFileOperationsReturn {
@@ -201,24 +204,16 @@ export function useFileOperations(options: UseFileOperationsOptions): UseFileOpe
     }
   };
 
-  const prepareSave = () => {
-    const tab = tabs.value.find(t => t.id === activeTabId.value);
-    if (!tab) return null;
-    // When in code view, getMarkdownOverride() returns the raw markdown directly —
-    // avoids the empty-content bug caused by SplitContainer being unmounted.
-    const markdownOverride = getMarkdownOverride?.() ?? null;
-    const html = markdownOverride === null ? getEditorHtml() : null;
-
-    // The text to write comes from the serializer, which answers null when no
-    // mounted editor owns the document. Falling through to getEditorHtml() at
-    // that point is what let the '<p></p>' placeholder, which converts to an
-    // empty string, reach the disk.
-    const source = getSaveMarkdown
-      ? getSaveMarkdown()
-      : (markdownOverride ?? htmlToMarkdown(html!));
+  const prepareSave = (tab: Tab, sourceOverride?: string | null) => {
+    let source = sourceOverride;
+    if (source === undefined) {
+      source = getSaveMarkdown
+        ? getSaveMarkdown()
+        : (getMarkdownOverride?.() ?? htmlToMarkdown(getEditorHtml()));
+    }
     if (source === null) {
       console.error('[save] no editor could supply content for', tab.fileName);
-      onSaveFailed?.();
+      onSaveFailed?.(tab);
       return null;
     }
 
@@ -232,7 +227,7 @@ export function useFileOperations(options: UseFileOperationsOptions): UseFileOpe
     return { state: captureSaveState(tab, markdown), markdown: markdown.trimEnd() };
   };
 
-  const writeAndUpdateTab = async (filePath: string, prepared: { state: SaveState; markdown: string }): Promise<void> => {
+  const writeAndUpdateTab = async (filePath: string, prepared: { state: SaveState; markdown: string }): Promise<boolean> => {
     let { state } = prepared;
     const { tab } = state;
     let { markdown } = prepared;
@@ -242,8 +237,8 @@ export function useFileOperations(options: UseFileOperationsOptions): UseFileOpe
       const diskContent = await checkPreSaveConflict(filePath, tab.originalMarkdown);
       if (diskContent !== null) {
         const decision = await onPreSaveConflict(filePath, diskContent, markdown);
-        if (decision === 'cancel') return;
-        if (tab.filePath !== state.filePath) return;
+        if (decision === 'cancel') return false;
+        if (tab.filePath !== state.filePath) return false;
         // If user applied a manual merge, use the merged content instead.
         // The merged source becomes the snapshot actually written to disk.
         if (decision !== 'save') {
@@ -257,24 +252,29 @@ export function useFileOperations(options: UseFileOperationsOptions): UseFileOpe
 
     await atomicWriteFile(filePath, markdown);
 
-    completeSave(state, filePath, markdown);
+    const saved = completeSave(state, filePath, markdown);
 
     // Tell host to start watching this path (no-op if already watched).
     onAfterSave?.(filePath, markdown);
+    return saved;
   };
 
-  const saveFile = async (): Promise<void> => {
+  const saveFile = async (target?: DocumentSaveTarget): Promise<boolean> => {
     try {
-      const tab = tabs.value.find(t => t.id === activeTabId.value);
-      if (!tab) return;
+      const tab = target?.tab ?? tabs.value.find(t => t.id === activeTabId.value);
+      if (!tab) return false;
+      if (target?.markdown === null) {
+        onSaveFailed?.(tab);
+        return false;
+      }
       let filePath = tab.filePath;
 
       // Skip save if file exists and has no changes
       if (filePath && !tab.hasChanges) {
-        return;
+        return true;
       }
-      const prepared = prepareSave();
-      if (!prepared) return;
+      const prepared = prepareSave(tab, target?.markdown);
+      if (!prepared) return false;
 
       if (!filePath) {
         filePath = await save({
@@ -284,16 +284,19 @@ export function useFileOperations(options: UseFileOperationsOptions): UseFileOpe
       }
 
       if (filePath) {
-        await writeAndUpdateTab(filePath, prepared);
+        return await writeAndUpdateTab(filePath, prepared);
       }
     } catch (error) {
       console.error('Error saving file:', error);
     }
+    return false;
   };
 
   const saveFileAs = async (): Promise<void> => {
     try {
-      const prepared = prepareSave();
+      const tab = tabs.value.find(t => t.id === activeTabId.value);
+      if (!tab) return;
+      const prepared = prepareSave(tab);
       if (!prepared) return;
       const oldPath = prepared.state.filePath;
       const filePath = await save({

@@ -47,15 +47,17 @@ const isValidDropTarget = computed(() => {
   return isDragging.value && draggedTab.value?.paneId !== props.pane.id;
 });
 
-const handleContentUpdate = (content: string) => {
-  if (activeTab.value) {
-    emit('updateContent', activeTab.value.id, content);
+const handleContentUpdate = (content: string, documentId: string | undefined) => {
+  const tab = props.pane.tabs.find(tab => tab.id === documentId);
+  if (tab) {
+    emit('updateContent', tab.id, content);
   }
 };
 
-const handleChangesUpdate = (hasChanges: boolean) => {
-  if (activeTab.value) {
-    emit('updateChanges', activeTab.value.id, hasChanges);
+const handleChangesUpdate = (hasChanges: boolean, documentId: string | undefined) => {
+  const tab = props.pane.tabs.find(tab => tab.id === documentId);
+  if (tab) {
+    emit('updateChanges', tab.id, hasChanges);
   }
 };
 
@@ -93,7 +95,12 @@ defineExpose({
   getFilePath: () => activeTab.value?.filePath ?? null,
   insertImagesByPath: (items: { path: string; alt: string }[]) =>
     editorRef.value?.insertImagesByPath?.(items),
-  getEditorContent: () => editorRef.value?.editor?.getHTML() || '',
+  getEditorContent: () => editorRef.value?.editor?.getHTML() ?? null,
+  getEditorSource: () => {
+    const instance = editorRef.value;
+    if (!instance?.editor || instance.editor.isDestroyed || !instance.documentId) return null;
+    return { tabId: instance.documentId, html: instance.editor.getHTML() };
+  },
   setEditorContent: (_content: string) => { /* handled reactively via modelValue prop */ },
   getSearchTextMap: () => editorRef.value?.getSearchTextMap?.() ?? null,
   setSearchHighlights: (...args: Parameters<NonNullable<InstanceType<typeof Editor>['setSearchHighlights']>>) =>
@@ -137,7 +144,9 @@ defineExpose({
     <div class="editor-wrapper">
       <Editor
         v-if="!isEmpty"
+        :key="activeTab?.id"
         ref="editorRef"
+        :document-id="activeTab?.id"
         :model-value="editorContent"
         :file-path="editorFilePath"
         @update:model-value="handleContentUpdate"
