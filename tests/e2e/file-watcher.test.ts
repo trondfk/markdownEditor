@@ -28,6 +28,52 @@ async function saveAs(page: import('@playwright/test').Page, savePath: string) {
 // ============================================================
 
 test.describe('File Watcher — silent reload (no local changes)', () => {
+  test('opening a visual document keeps its source clean through Save As and close', async ({ page }) => {
+    const savedPath = '/test/loaded-source.md';
+    const mocks = await setupTauriMocks(page, {
+      initialFs: { [SAMPLE_PATH]: SAMPLE_MD },
+      openFilePath: SAMPLE_PATH,
+    });
+    await page.goto('/');
+    await expect(page.locator('.ProseMirror h1')).toHaveText('Original Content');
+    await expect(page.locator('.tab.active .tab-unsaved')).not.toBeVisible();
+
+    await saveAs(page, savedPath);
+
+    expect(mocks.getFs()[savedPath]).toBe(SAMPLE_MD.trimEnd());
+    expect(mocks.getFs()[SAMPLE_PATH]).toBe(SAMPLE_MD);
+    await expect(page.locator('.tab.active .tab-unsaved')).not.toBeVisible();
+    const savedTab = page.locator('.tab-bar .tab').filter({ hasText: 'loaded-source.md' });
+    await savedTab.locator('.tab-close').click();
+    await expect(savedTab).not.toBeVisible();
+    await expect(page.locator('.dialog')).not.toBeVisible();
+  });
+
+  test('successive external reloads preserve clean status and authoritative Markdown', async ({ page }) => {
+    const savedPath = '/test/reloaded-source.md';
+    const secondUpdate = '# Reloaded again\n\nSecond external content.\n';
+    const mocks = await setupTauriMocks(page, {
+      initialFs: { [SAMPLE_PATH]: SAMPLE_MD },
+      openFilePath: SAMPLE_PATH,
+    });
+    await page.goto('/');
+    await expect(page.locator('.ProseMirror h1')).toHaveText('Original Content');
+    await page.waitForTimeout(500);
+    await mocks.triggerExternalChange(SAMPLE_PATH, UPDATED_MD);
+    await expect(page.locator('.ProseMirror h1')).toHaveText('Updated Externally');
+    await expect(page.locator('.tab.active .tab-unsaved')).not.toBeVisible();
+    await expect(page.locator('.toast-container')).toBeVisible();
+
+    await mocks.triggerExternalChange(SAMPLE_PATH, secondUpdate);
+
+    await expect(page.locator('.ProseMirror h1')).toHaveText('Reloaded again');
+    await expect(page.locator('.tab.active .tab-unsaved')).not.toBeVisible();
+    await expect(page.locator('.conflict-panel')).not.toBeVisible();
+    await saveAs(page, savedPath);
+    expect(mocks.getFs()[savedPath]).toBe(secondUpdate.trimEnd());
+    expect(mocks.getFs()[SAMPLE_PATH]).toBe(secondUpdate);
+  });
+
   test('external change with no local edits triggers silent reload toast', async ({ page }) => {
     const { triggerExternalChange } = await setupTauriMocks(page, {
       initialFs: { [SAMPLE_PATH]: SAMPLE_MD },

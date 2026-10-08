@@ -641,7 +641,7 @@ watch(
   async (newValue) => {
     if (editor.value && newValue !== editor.value.getHTML()) {
       settingContentCount++;
-      editor.value.commands.setContent(newValue || "");
+      editor.value.commands.setContent(newValue || "", { emitUpdate: false });
       lastSavedHtml = editor.value.getHTML();
       await nextTick();
       // Resolve local image paths to blob URLs.
