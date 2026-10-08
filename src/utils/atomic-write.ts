@@ -1,33 +1,31 @@
 // ABOUTME: Writes a text file through a verified temporary sibling instead of straight onto the target.
-// ABOUTME: Shared by every save path so the unattended ones are as crash-safe as an explicit Ctrl+S.
+// ABOUTME: Shared by manual save, autosave, close-save and transfer-save.
 
 import { writeTextFile, readTextFile, rename, remove } from '@tauri-apps/plugin-fs';
 
 /**
- * Writes `content` to `filePath` via a `.tmp` sibling that is read back and
- * compared before it replaces the target.
- *
- * A direct write truncates the file first, so a crash, a full disk or a killed
- * process leaves the document half-written with no way back. Going through a
- * sibling means the original survives every failure: either the rename happens
- * and the new content is complete, or it does not and the old file is untouched.
+ * Writes through an exclusively created temporary sibling, verifies its content,
+ * then replaces the target by rename. Each operation owns its sibling independently
+ * of other saves to the same destination.
  */
 export async function atomicWriteTextFile(filePath: string, content: string): Promise<void> {
-  const tmpPath = `${filePath}.tmp`;
+  const directoryEnd = Math.max(filePath.lastIndexOf('/'), filePath.lastIndexOf('\\')) + 1;
+  const tmpPath = `${filePath.slice(0, directoryEnd)}mermark-${crypto.randomUUID()}.tmp`;
+  // Reserve ownership before writing the payload. Failed creation must not clean
+  // up a path that could belong to another operation.
+  await writeTextFile(tmpPath, '', { createNew: true });
   try {
-    await writeTextFile(tmpPath, content);
+    await writeTextFile(tmpPath, content, { create: false });
     const written = await readTextFile(tmpPath);
     if (written !== content) {
       throw new Error('atomic write verification failed: the bytes on disk do not match what we wrote');
     }
     await rename(tmpPath, filePath);
   } catch (error) {
-    // Leaving a stray .tmp behind would confuse the workspace tree and the
-    // next save, so clear it even though the write itself already failed.
     try {
       await remove(tmpPath);
     } catch {
-      /* the tmp file may never have been created */
+      /* preserve the original write, verification or rename error */
     }
     throw error;
   }

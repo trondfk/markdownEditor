@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { ref, computed } from 'vue';
 import type { Tab } from '../../composables/useTabs';
+import type { WriteFileOptions } from '@tauri-apps/plugin-fs';
 import { setDocumentMarkdown } from '../../utils/save-state';
 
 // ============================================================
@@ -11,6 +12,13 @@ const mockReadTextFile = vi.fn();
 const mockWriteTextFile = vi.fn();
 const mockRename = vi.fn();
 const mockRemove = vi.fn();
+const mockFiles = new Map<string, string>();
+
+const writeMockFile = (files: Map<string, string>, path: string, content: string, options?: WriteFileOptions) => {
+  if (options?.createNew && files.has(path)) throw new Error(`EEXIST: ${path}`);
+  if (!options?.createNew && options?.create === false && !files.has(path)) throw new Error(`ENOENT: ${path}`);
+  files.set(path, content);
+};
 const mockOpenDialog = vi.fn();
 const mockSaveDialog = vi.fn();
 const mockOpenShell = vi.fn();
@@ -120,9 +128,17 @@ const makeOptions = (tabOverrides: Partial<Tab> = {}, extraOptions: Record<strin
 describe('useFileOperations', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockWriteTextFile.mockResolvedValue(undefined);
-    mockRename.mockResolvedValue(undefined);
-    mockRemove.mockResolvedValue(undefined);
+    mockFiles.clear();
+    mockFiles.set('/test/file.md', '# hello');
+    mockWriteTextFile.mockImplementation(async (path, content, options) => writeMockFile(mockFiles, path, content, options));
+    mockRename.mockImplementation(async (from, to) => {
+      if (!mockFiles.has(from)) throw new Error(`ENOENT rename: ${from}`);
+      mockFiles.set(to, mockFiles.get(from)!); mockFiles.delete(from);
+    });
+    mockRemove.mockImplementation(async path => {
+      if (!mockFiles.has(path)) throw new Error(`ENOENT remove: ${path}`);
+      mockFiles.delete(path);
+    });
     mockReadTextFile.mockResolvedValue('# hello');
   });
 
@@ -143,8 +159,10 @@ describe('useFileOperations', () => {
 
       await saveFile();
 
-      const tmpPath = '/test/file.md.tmp';
-      expect(mockWriteTextFile).toHaveBeenCalledWith(tmpPath, expect.any(String));
+      const tmpPath = mockWriteTextFile.mock.calls[0][0];
+      expect(tmpPath).toMatch(/^\/test\/mermark-[0-9a-f-]{36}\.tmp$/);
+      expect(mockWriteTextFile).toHaveBeenCalledWith(tmpPath, '', { createNew: true });
+      expect(mockWriteTextFile).toHaveBeenCalledWith(tmpPath, 'md:<p>hello</p>', { create: false });
       expect(mockRename).toHaveBeenCalledWith(tmpPath, '/test/file.md');
     });
 
@@ -164,7 +182,10 @@ describe('useFileOperations', () => {
     });
 
     it('removes .tmp file and rethrows when writeTextFile fails', async () => {
-      mockWriteTextFile.mockRejectedValue(new Error('disk full'));
+      mockWriteTextFile.mockImplementation(async (path, content, options) => {
+        writeMockFile(mockFiles, path, '', options);
+        if (content) throw new Error('disk full');
+      });
       const markSaveEnd = vi.fn();
 
       const { options, tabs } = makeOptions();
@@ -173,7 +194,8 @@ describe('useFileOperations', () => {
       // saveFile swallows errors internally (console.error) — verify .tmp cleanup
       await saveFile();
 
-      expect(mockRemove).toHaveBeenCalledWith('/test/file.md.tmp');
+      expect(mockRemove).toHaveBeenCalledWith(mockWriteTextFile.mock.calls[0][0]);
+      expect([...mockFiles.keys()]).toEqual(['/test/file.md']);
       // tab should remain unchanged (hasChanges still true)
       expect(tabs.value[0].hasChanges).toBe(true);
     });
@@ -190,7 +212,7 @@ describe('useFileOperations', () => {
       await saveFile();
 
       // .tmp should be cleaned up on verification failure
-      expect(mockRemove).toHaveBeenCalledWith('/test/file.md.tmp');
+      expect(mockRemove).toHaveBeenCalledWith(mockWriteTextFile.mock.calls[0][0]);
       // tab should remain unsaved
       expect(tabs.value[0].hasChanges).toBe(true);
     });
@@ -236,7 +258,7 @@ describe('useFileOperations', () => {
       await saveFile();
 
       // Should write the raw override content, NOT the HTML→markdown conversion
-      expect(mockWriteTextFile).toHaveBeenCalledWith('/test/file.md.tmp', rawMarkdown);
+      expect(mockWriteTextFile).toHaveBeenCalledWith(expect.stringMatching(/^\/test\/mermark-[0-9a-f-]{36}\.tmp$/), rawMarkdown, { create: false });
       expect(htmlToMarkdown).not.toHaveBeenCalled();
     });
 
@@ -313,7 +335,7 @@ describe('useFileOperations', () => {
 
       await saveFile();
 
-      expect(mockWriteTextFile).toHaveBeenCalledWith('/test/file.md.tmp', resolved);
+      expect(mockWriteTextFile).toHaveBeenCalledWith(expect.stringMatching(/^\/test\/mermark-[0-9a-f-]{36}\.tmp$/), resolved, { create: false });
     });
 
     it('abandons the save when no editor can supply the content', async () => {
@@ -442,7 +464,7 @@ describe('useFileOperations', () => {
       await saveFile();
 
       expect(mockSaveDialog).toHaveBeenCalled();
-      expect(mockWriteTextFile).toHaveBeenCalledWith('/new/path/file.md.tmp', expect.any(String));
+      expect(mockWriteTextFile).toHaveBeenCalledWith(expect.stringMatching(/^\/new\/path\/mermark-[0-9a-f-]{36}\.tmp$/), 'md:<p>hello</p>', { create: false });
     });
 
     it('updates tab state after successful save', async () => {
@@ -469,9 +491,19 @@ describe('useFileOperations', () => {
       tabs.value.push(other);
       options.activeTabId.value = other.id;
       const files = new Map<string, string>();
-      mockWriteTextFile.mockImplementation(async (path, content) => { files.set(path, content); });
-      mockReadTextFile.mockImplementation(async path => files.get(path));
-      mockRename.mockImplementation(async (from, to) => { files.set(to, files.get(from)!); files.delete(from); });
+      mockWriteTextFile.mockImplementation(async (path, content, options) => writeMockFile(files, path, content, options));
+      mockReadTextFile.mockImplementation(async path => {
+        if (!files.has(path)) throw new Error(`ENOENT: ${path}`);
+        return files.get(path)!;
+      });
+      mockRename.mockImplementation(async (from, to) => {
+        if (!files.has(from)) throw new Error(`ENOENT rename: ${from}`);
+        files.set(to, files.get(from)!); files.delete(from);
+      });
+      mockRemove.mockImplementation(async path => {
+        if (!files.has(path)) throw new Error(`ENOENT remove: ${path}`);
+        files.delete(path);
+      });
       const operations = useFileOperations({ ...options, getSaveMarkdown: () => 'Unsaved B' });
       await operations.saveFile({ tab: target, markdown: target.markdown! });
       expect(files.get('/test/file.md')).toBe('Pinned A');
@@ -516,20 +548,28 @@ describe('useFileOperations', () => {
     });
 
     const pauseRename = () => {
-      const files = new Map<string, string>();
+      const files = new Map<string, string>([['/test/file.md', '# hello']]);
       let release!: () => void;
       let started!: () => void;
       const pending = new Promise<void>(resolve => { release = resolve; });
       const entered = new Promise<void>(resolve => { started = resolve; });
-      mockWriteTextFile.mockImplementation(async (path: string, content: string) => {
-        files.set(path, content);
+      mockWriteTextFile.mockImplementation(async (path: string, content: string, options?: WriteFileOptions) => {
+        writeMockFile(files, path, content, options);
       });
-      mockReadTextFile.mockImplementation(async (path: string) => files.get(path) ?? '# hello');
+      mockReadTextFile.mockImplementation(async (path: string) => {
+        if (!files.has(path)) throw new Error(`ENOENT: ${path}`);
+        return files.get(path)!;
+      });
       mockRename.mockImplementation(async (from: string, to: string) => {
         started();
         await pending;
+        if (!files.has(from)) throw new Error(`ENOENT rename: ${from}`);
         files.set(to, files.get(from)!);
         files.delete(from);
+      });
+      mockRemove.mockImplementation(async (path: string) => {
+        if (!files.has(path)) throw new Error(`ENOENT remove: ${path}`);
+        files.delete(path);
       });
       return { files, entered, release };
     };
@@ -598,6 +638,7 @@ describe('useFileOperations', () => {
       const rename = mockRename.getMockImplementation()!;
       mockRename.mockImplementation(async (from: string, to: string) => {
         if (to === '/test/file.md') return rename(from, to);
+        if (!paused.files.has(from)) throw new Error(`ENOENT rename: ${from}`);
         paused.files.set(to, paused.files.get(from)!);
         paused.files.delete(from);
       });
@@ -639,6 +680,7 @@ describe('useFileOperations', () => {
       const rename = mockRename.getMockImplementation()!;
       mockRename.mockImplementation(async (from: string, to: string) => {
         if (to === '/test/file.md') return rename(from, to);
+        if (!paused.files.has(from)) throw new Error(`ENOENT rename: ${from}`);
         paused.files.set(to, paused.files.get(from)!);
         paused.files.delete(from);
       });

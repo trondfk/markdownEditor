@@ -48,8 +48,10 @@ export async function setupTauriMocks(
     return fs[path];
   });
 
-  await page.exposeFunction('__mockFsWrite', (path: string, content: string): void => {
-    calls.push({ cmd: 'write', args: { path, content } });
+  await page.exposeFunction('__mockFsWrite', (path: string, content: string, options?: { createNew?: boolean; create?: boolean }): void => {
+    calls.push({ cmd: 'write', args: { path, content, options } });
+    if (options?.createNew && path in fs) throw new Error(`EEXIST: ${path}`);
+    if (!options?.createNew && options?.create === false && !(path in fs)) throw new Error(`ENOENT: ${path}`);
     fs[path] = content;
   });
 
@@ -63,6 +65,7 @@ export async function setupTauriMocks(
 
   await page.exposeFunction('__mockFsRemove', (path: string): void => {
     calls.push({ cmd: 'remove', args: path });
+    if (!(path in fs)) throw new Error(`ENOENT remove: ${path}`);
     delete fs[path];
   });
 
@@ -146,7 +149,9 @@ export async function setupTauriMocks(
             const headers = (options as Record<string, unknown>)?.headers as Record<string, string> | undefined;
             const path = decodeURIComponent(headers?.path ?? '');
             const content = new TextDecoder().decode(args as Uint8Array);
-            return call('__mockFsWrite', path, content);
+            const writeOptions = headers?.options && headers.options !== 'undefined'
+              ? JSON.parse(headers.options) : undefined;
+            return call('__mockFsWrite', path, content, writeOptions);
           }
           if (cmd === 'plugin:fs|rename') {
             const a = args as Record<string, unknown>;

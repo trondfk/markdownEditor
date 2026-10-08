@@ -27,6 +27,43 @@ async function saveAs(page: import('@playwright/test').Page, savePath: string) {
 // ============================================================
 
 test.describe('Atomic Save — write .tmp → rename', () => {
+  test('overlapping saves keep separate verified temporary snapshots', async ({ page }) => {
+    let entered!: () => void, release!: () => void;
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    const pending = new Promise<void>(resolve => { release = resolve; });
+    let renames = 0;
+    const { getFs, getCalls } = await setupTauriMocks(page, {
+      initialFs: { [SAMPLE_PATH]: SAMPLE_MD },
+      openFilePath: SAMPLE_PATH,
+      beforeRename: async () => {
+        if (++renames !== 1) return;
+        entered(); await pending;
+      },
+    });
+    try {
+      await page.goto('/');
+      await waitForTab(page, 'hello.md');
+      await openCodeView(page);
+      await fillCodeEditor(page, '# Snapshot A');
+      await page.evaluate(path => {
+        (window as Record<string, unknown>).__mockDialogSavePath = path;
+      }, SAMPLE_PATH);
+      await page.keyboard.press('Control+Shift+s');
+      await started;
+      await fillCodeEditor(page, '# Snapshot B');
+      await page.keyboard.press('Control+Shift+s');
+      await expect.poll(() => getFs()[SAMPLE_PATH]).toBe('# Snapshot B');
+      const paths = getCalls().filter(call => call.cmd === 'rename')
+        .map(call => (call.args as { from: string }).from);
+      expect(new Set(paths).size).toBe(2);
+      expect(getFs()[paths[0]]).toBe('# Snapshot A');
+      release();
+      // Replacement order is independent of temporary-file ownership.
+      await expect.poll(() => getFs()[SAMPLE_PATH]).toBe('# Snapshot A');
+      expect(Object.keys(getFs()).filter(path => path.endsWith('.tmp'))).toEqual([]);
+    } finally { release(); }
+  });
+
   test('saves via .tmp file that is then renamed to final path', async ({ page }) => {
     const { getFs, getCalls } = await setupTauriMocks(page, {
       initialFs: { [SAMPLE_PATH]: SAMPLE_MD },
@@ -54,11 +91,21 @@ test.describe('Atomic Save — write .tmp → rename', () => {
       return a.from?.endsWith('.tmp') && a.to === SAVE_PATH;
     });
     expect(renameOp, 'Should rename .tmp to final path').toBeTruthy();
+    const temporaryPath = (renameOp!.args as { from: string }).from;
+    expect(writeCalls.map(call => call.args)).toContainEqual({
+      path: temporaryPath, content: '', options: { createNew: true },
+    });
+    expect(writeCalls.map(call => call.args)).toContainEqual({
+      path: temporaryPath, content: getFs()[SAVE_PATH], options: { create: false },
+    });
+    expect(calls.some(call => call.cmd === 'read' && call.args === temporaryPath)).toBe(true);
 
     // Final file must have content
     const finalFs = getFs();
     expect(finalFs[SAVE_PATH]).toBeTruthy();
     expect(finalFs[SAVE_PATH].length).toBeGreaterThan(0);
+    expect(finalFs[SAVE_PATH]).toContain('Hello World');
+    expect(finalFs[SAVE_PATH]).toContain('This is a test file.');
   });
 
   test('no .tmp leftover on disk after successful save', async ({ page }) => {

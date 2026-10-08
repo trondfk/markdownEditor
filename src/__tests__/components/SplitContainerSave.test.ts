@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { WriteFileOptions } from '@tauri-apps/plugin-fs';
 import { mount } from '@vue/test-utils';
 import SplitContainer from '../../components/SplitContainer.vue';
 import { useSplitView } from '../../composables/useSplitView';
@@ -13,13 +14,24 @@ const mocks = vi.hoisted(() => {
   return {
     files, registry, destination, destinationReady, commitReady,
     dropOutside: null as null | ((tabId: string, paneId: string, filePath: string) => Promise<void>),
-    writeTextFile: vi.fn(async (path: string, content: string) => { files.set(path, content); }),
-    readTextFile: vi.fn(async (path: string) => files.get(path)!),
+    writeTextFile: vi.fn(async (path: string, content: string, options?: WriteFileOptions) => {
+      if (options?.createNew && files.has(path)) throw new Error(`EEXIST: ${path}`);
+      if (!options?.createNew && options?.create === false && !files.has(path)) throw new Error(`ENOENT: ${path}`);
+      files.set(path, content);
+    }),
+    readTextFile: vi.fn(async (path: string) => {
+      if (!files.has(path)) throw new Error(`ENOENT: ${path}`);
+      return files.get(path)!;
+    }),
     rename: vi.fn(async (from: string, to: string) => {
+      if (!files.has(from)) throw new Error(`ENOENT rename: ${from}`);
       files.set(to, files.get(from)!);
       files.delete(from);
     }),
-    remove: vi.fn(async (path: string) => { files.delete(path); }),
+    remove: vi.fn(async (path: string) => {
+      if (!files.has(path)) throw new Error(`ENOENT remove: ${path}`);
+      files.delete(path);
+    }),
     createNewWindow: vi.fn(async (path: string) => {
       registry.set(path, 'target');
       destination.set(path, files.get(path)!);
@@ -91,6 +103,7 @@ describe('saving before tab transfer', () => {
     mocks.rename.mockImplementationOnce(async (from, to) => {
       started.resolve();
       await release.promise;
+      if (!mocks.files.has(from)) throw new Error(`ENOENT rename: ${from}`);
       mocks.files.set(to, mocks.files.get(from)!);
       mocks.files.delete(from);
     });

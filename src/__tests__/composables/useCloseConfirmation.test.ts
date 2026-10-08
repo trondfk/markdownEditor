@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Tab } from '../../composables/useTabs';
+import type { WriteFileOptions } from '@tauri-apps/plugin-fs';
 import type { UnsavedTab } from '../../composables/useCloseConfirmation';
 import { setDocumentMarkdown } from '../../utils/save-state';
 import { ref } from 'vue';
@@ -17,7 +18,9 @@ const fsMocks = vi.hoisted(() => {
   const files = new Map<string, string>();
   return {
     files,
-    writeTextFile: vi.fn(async (path: string, content: string) => {
+    writeTextFile: vi.fn(async (path: string, content: string, options?: WriteFileOptions) => {
+      if (options?.createNew && files.has(path)) throw new Error(`EEXIST: ${path}`);
+      if (!options?.createNew && options?.create === false && !files.has(path)) throw new Error(`ENOENT: ${path}`);
       files.set(path, content);
     }),
     readTextFile: vi.fn(async (path: string) => {
@@ -25,10 +28,12 @@ const fsMocks = vi.hoisted(() => {
       return files.get(path)!;
     }),
     rename: vi.fn(async (from: string, to: string) => {
+      if (!files.has(from)) throw new Error(`ENOENT rename: ${from}`);
       files.set(to, files.get(from)!);
       files.delete(from);
     }),
     remove: vi.fn(async (path: string) => {
+      if (!files.has(path)) throw new Error(`ENOENT remove: ${path}`);
       files.delete(path);
     }),
     mkdir: vi.fn(async () => {}),
@@ -301,6 +306,7 @@ describe('useCloseConfirmation', () => {
       fsMocks.rename.mockImplementationOnce(async (from, to) => {
         started();
         await pending;
+        if (!fsMocks.files.has(from)) throw new Error(`ENOENT rename: ${from}`);
         fsMocks.files.set(to, fsMocks.files.get(from)!);
         fsMocks.files.delete(from);
       });
@@ -341,6 +347,7 @@ describe('useCloseConfirmation', () => {
       fsMocks.rename.mockImplementationOnce(async (from, to) => {
         entered();
         await gate;
+        if (!fsMocks.files.has(from)) throw new Error(`ENOENT rename: ${from}`);
         fsMocks.files.set(to, fsMocks.files.get(from)!);
         fsMocks.files.delete(from);
       });
@@ -371,6 +378,7 @@ describe('useCloseConfirmation', () => {
       fsMocks.rename.mockImplementationOnce(async (from, to) => {
         entered();
         await gate;
+        if (!fsMocks.files.has(from)) throw new Error(`ENOENT rename: ${from}`);
         fsMocks.files.set(to, fsMocks.files.get(from)!);
         fsMocks.files.delete(from);
       });
@@ -509,7 +517,7 @@ describe('useCloseConfirmation', () => {
       currentTabToSave.value = { paneId: 'left', tab };
       await handleSave();
 
-      expect(fsMocks.files.has('D:/notes/important.md.tmp')).toBe(false);
+      expect([...fsMocks.files.keys()].filter(path => path.endsWith('.tmp'))).toEqual([]);
     });
 
     // The original file has to survive a failed write, which is the whole point
@@ -534,7 +542,7 @@ describe('useCloseConfirmation', () => {
       await handleSave();
 
       expect(fsMocks.files.get('D:/notes/important.md')).toBe('# Hours of work');
-      expect(fsMocks.files.has('D:/notes/important.md.tmp')).toBe(false);
+      expect([...fsMocks.files.keys()].filter(path => path.endsWith('.tmp'))).toEqual([]);
       expect(tab.hasChanges).toBe(true);
     });
   });
