@@ -3,6 +3,7 @@ import { ref, computed } from 'vue';
 import type { Tab } from '../../composables/useTabs';
 import type { WriteFileOptions } from '@tauri-apps/plugin-fs';
 import { setDocumentMarkdown } from '../../utils/save-state';
+import * as atomicWrite from '../../utils/atomic-write';
 
 // ============================================================
 // Mocks — must be hoisted above imports
@@ -76,6 +77,12 @@ import { htmlToMarkdown, markdownToHtml } from '../../utils/markdown-converter';
 // ============================================================
 // Helpers
 // ============================================================
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>(done => { resolve = done; });
+  return { promise, resolve };
+}
 
 const makeTab = (overrides: Partial<Tab> = {}): Tab => ({
   id: 'tab-1',
@@ -613,6 +620,121 @@ describe('useFileOperations', () => {
       expect(tabs.value[0].originalMarkdown).toBe('md:<p>hello</p>');
     });
 
+    it('keeps the newer baseline and protects edits when an older save acknowledgement arrives last', async () => {
+      const { options, tabs } = makeOptions({ content: '<p>A</p>', markdown: 'md:<p>A</p>' });
+      const target = tabs.value[0];
+      const path = target.filePath!;
+      options.getEditorHtml.mockImplementation(() => target.content);
+      mockReadTextFile.mockImplementation(async (filePath: string) => {
+        if (!mockFiles.has(filePath)) throw new Error(`ENOENT: ${filePath}`);
+        return mockFiles.get(filePath)!;
+      });
+      const writeAtomically = atomicWrite.atomicWriteTextFile;
+      let acknowledge!: () => void;
+      let committed!: () => void;
+      const acknowledgement = new Promise<void>(resolve => { acknowledge = resolve; });
+      const firstCommitted = new Promise<void>(resolve => { committed = resolve; });
+      // Delay only the frontend acknowledgement, after the real FIFO write finishes.
+      const delayedWrite = vi.spyOn(atomicWrite, 'atomicWriteTextFile').mockImplementationOnce(async (...args) => {
+        await writeAtomically(...args);
+        committed();
+        await acknowledgement;
+      });
+
+      const operations = useFileOperations(options);
+      const first = operations.saveFile();
+      try {
+        await firstCommitted;
+        expect(mockFiles.get(path)).toBe('md:<p>A</p>');
+
+        target.content = '<p>B</p>';
+        setDocumentMarkdown(target, 'md:<p>B</p>');
+        expect(await operations.saveFile()).toBe(true);
+        expect(mockFiles.get(path)).toBe('md:<p>B</p>');
+        expect(target.originalMarkdown).toBe('md:<p>B</p>');
+        expect(target.hasChanges).toBe(false);
+
+        target.content = '<p>A</p>';
+        setDocumentMarkdown(target, 'md:<p>A</p>');
+        expect(target.hasChanges).toBe(true);
+        const revision = target.editRevision;
+
+        acknowledge();
+        const saved = await first;
+
+        expect(mockFiles.get(path)).toBe('md:<p>B</p>');
+        expect(target.content).toBe('<p>A</p>');
+        expect(target.markdown).toBe('md:<p>A</p>');
+        expect(target.editRevision).toBe(revision);
+        expect.soft(target.originalMarkdown).toBe('md:<p>B</p>');
+        expect.soft(target.hasChanges).toBe(true);
+        expect.soft(saved).toBe(false);
+      } finally {
+        acknowledge();
+        await first;
+        delayedWrite.mockRestore();
+      }
+    });
+
+    it.each([
+      ['write failure', 'A'], ['write failure', 'B'],
+      ['cancelled Save As', 'A'], ['cancelled Save As', 'B'],
+    ])('accepts the older disk write after a newer %s while the editor contains %s', async (outcome, currentText) => {
+      const { options, tabs } = makeOptions({ content: '<p>A</p>', markdown: 'md:<p>A</p>' });
+      const target = tabs.value[0];
+      const path = target.filePath!;
+      const previousBaseline = target.originalMarkdown;
+      options.getEditorHtml.mockImplementation(() => target.content);
+      mockReadTextFile.mockImplementation(async (filePath: string) => {
+        if (!mockFiles.has(filePath)) throw new Error(`ENOENT: ${filePath}`);
+        return mockFiles.get(filePath)!;
+      });
+      const writeAtomically = atomicWrite.atomicWriteTextFile;
+      let acknowledge!: () => void;
+      let committed!: () => void;
+      const acknowledgement = new Promise<void>(resolve => { acknowledge = resolve; });
+      const firstCommitted = new Promise<void>(resolve => { committed = resolve; });
+      const delayedWrite = vi.spyOn(atomicWrite, 'atomicWriteTextFile').mockImplementationOnce(async (...args) => {
+        await writeAtomically(...args);
+        committed();
+        await acknowledgement;
+      });
+      const operations = useFileOperations(options);
+      const first = operations.saveFile();
+      try {
+        await firstCommitted;
+        target.content = '<p>B</p>';
+        setDocumentMarkdown(target, 'md:<p>B</p>');
+        if (outcome === 'write failure') {
+          mockRename.mockRejectedValueOnce(new Error('Newer write failed'));
+          expect(await operations.saveFile()).toBe(false);
+        } else {
+          mockSaveDialog.mockResolvedValueOnce(null);
+          await operations.saveFileAs();
+        }
+        expect(mockFiles.get(path)).toBe('md:<p>A</p>');
+        expect(target.originalMarkdown).toBe(previousBaseline);
+        expect(target.hasChanges).toBe(true);
+        expect([...mockFiles.keys()]).toEqual([path]);
+
+        target.content = `<p>${currentText}</p>`;
+        setDocumentMarkdown(target, `md:<p>${currentText}</p>`);
+        const revision = target.editRevision;
+        acknowledge();
+        expect(await first).toBe(currentText === 'A');
+        expect(target.originalMarkdown).toBe('md:<p>A</p>');
+        expect(target.hasChanges).toBe(currentText !== 'A');
+        expect(target.content).toBe(`<p>${currentText}</p>`);
+        expect(target.markdown).toBe(`md:<p>${currentText}</p>`);
+        expect(target.editRevision).toBe(revision);
+        expect(mockFiles.get(path)).toBe('md:<p>A</p>');
+      } finally {
+        acknowledge();
+        await first;
+        delayedWrite.mockRestore();
+      }
+    });
+
     it('does not restore a previous path when the document changes path during saving', async () => {
       const { options, tabs } = makeOptions();
       const paused = pauseRename();
@@ -781,6 +903,193 @@ describe('useFileOperations', () => {
       expect(original.filePath).toBe('/test/saved-as.md');
       expect(tabs.value[1].filePath).toBe('/test/other.md');
       expect(tabs.value[1].hasChanges).toBe(true);
+    });
+  });
+
+  describe('Save As delayed before the FIFO write', () => {
+    const fixture = () => {
+      const { options, tabs } = makeOptions({ content: '<p>A</p>', markdown: 'md:<p>A</p>' });
+      const tab = tabs.value[0];
+      options.getEditorHtml.mockImplementation(() => tab.content);
+      mockReadTextFile.mockImplementation(async (path: string) => {
+        if (!mockFiles.has(path)) throw new Error(`ENOENT: ${path}`);
+        return mockFiles.get(path)!;
+      });
+      const dialog = deferred<string | null>();
+      mockSaveDialog.mockReturnValueOnce(dialog.promise);
+      const onAfterSave = vi.fn();
+      const markSaveEnd = vi.fn();
+      const operations = useFileOperations({ ...options, onAfterSave, markSaveEnd });
+      const editB = () => {
+        tab.content = '<p>B</p>';
+        setDocumentMarkdown(tab, 'md:<p>B</p>');
+      };
+      return { tab, dialog, operations, editB, onAfterSave, markSaveEnd };
+    };
+
+    it.each(['/test/file.md', '/test/other.md'])('does not write or rebind delayed A to %s after B succeeds', async destination => {
+      mockFiles.set('/test/other.md', 'Unrelated');
+      const { tab, dialog, operations, editB, onAfterSave, markSaveEnd } = fixture();
+      const older = operations.saveFileAs();
+      try {
+        editB();
+        expect(await operations.saveFile()).toBe(true);
+        const current = { ...tab };
+        const writes = mockWriteTextFile.mock.calls.length;
+        dialog.resolve(destination);
+        await older;
+
+        expect.soft(mockFiles.get('/test/file.md')).toBe('md:<p>B</p>');
+        expect.soft(mockFiles.get('/test/other.md')).toBe('Unrelated');
+        expect.soft(mockWriteTextFile).toHaveBeenCalledTimes(writes);
+        expect.soft(mockRename).toHaveBeenCalledTimes(1);
+        expect({ ...tab }).toEqual(current);
+        expect(tab.hasChanges).toBe(false);
+        expect(onAfterSave).toHaveBeenCalledExactlyOnceWith('/test/file.md', 'md:<p>B</p>');
+        expect(markSaveEnd).toHaveBeenLastCalledWith('/test/file.md', 'md:<p>B</p>');
+      } finally { dialog.resolve(null); await older; }
+    });
+
+    it('rechecks delayed A inside the FIFO queue after the preceding B commits', async () => {
+      const { tab, dialog, operations, editB } = fixture();
+      const entered = deferred<void>(), release = deferred<void>(), queuedA = deferred<void>();
+      const rename = mockRename.getMockImplementation()!;
+      mockRename.mockImplementationOnce(async (from, to) => {
+        entered.resolve();
+        await release.promise;
+        await rename(from, to);
+      });
+      const write = atomicWrite.atomicWriteTextFile;
+      const spy = vi.spyOn(atomicWrite, 'atomicWriteTextFile').mockImplementation((...args) => {
+        const pending = write(...args);
+        if (args[1] === 'md:<p>A</p>') queuedA.resolve();
+        return pending;
+      });
+      const older = operations.saveFileAs();
+      editB();
+      const newer = operations.saveFile();
+      try {
+        await entered.promise;
+        dialog.resolve('/test/file.md');
+        await queuedA.promise;
+        expect(mockWriteTextFile).toHaveBeenCalledTimes(2);
+        release.resolve();
+        expect(await newer).toBe(true);
+        await older;
+
+        expect(mockFiles.get('/test/file.md')).toBe('md:<p>B</p>');
+        expect(mockWriteTextFile).toHaveBeenCalledTimes(2);
+        expect(mockRename).toHaveBeenCalledTimes(1);
+        expect(tab.originalMarkdown).toBe('md:<p>B</p>');
+        expect(tab.markdown).toBe('md:<p>B</p>');
+        expect(tab.hasChanges).toBe(false);
+      } finally {
+        dialog.resolve(null); release.resolve();
+        await Promise.allSettled([older, newer]);
+        spy.mockRestore();
+      }
+    });
+
+    it('rejects A even when B committed but its frontend acknowledgement is still delayed', async () => {
+      const { tab, dialog, operations, editB, markSaveEnd } = fixture();
+      const committed = deferred<void>(), acknowledge = deferred<void>();
+      const write = atomicWrite.atomicWriteTextFile;
+      const spy = vi.spyOn(atomicWrite, 'atomicWriteTextFile').mockImplementationOnce(async (...args) => {
+        await write(...args);
+        committed.resolve();
+        await acknowledge.promise;
+      });
+      const older = operations.saveFileAs();
+      editB();
+      const newer = operations.saveFile();
+      try {
+        await committed.promise;
+        const previousBaseline = tab.originalMarkdown;
+        dialog.resolve('/test/file.md');
+        await older;
+        expect.soft(mockFiles.get('/test/file.md')).toBe('md:<p>B</p>');
+        expect.soft(mockWriteTextFile).toHaveBeenCalledTimes(2);
+        expect(tab.originalMarkdown).toBe(previousBaseline);
+        expect(tab.markdown).toBe('md:<p>B</p>');
+        expect(tab.hasChanges).toBe(true);
+        expect(markSaveEnd).toHaveBeenLastCalledWith('/test/file.md', 'md:<p>B</p>');
+        acknowledge.resolve();
+        expect(await newer).toBe(true);
+        expect(tab.originalMarkdown).toBe('md:<p>B</p>');
+        expect(tab.hasChanges).toBe(false);
+      } finally {
+        dialog.resolve(null); acknowledge.resolve();
+        await Promise.allSettled([older, newer]);
+        spy.mockRestore();
+      }
+    });
+
+    it('rechecks A before rename when B saved another target during A readback', async () => {
+      const { tab, dialog, operations, editB } = fixture();
+      const entered = deferred<void>(), release = deferred<void>();
+      const read = mockReadTextFile.getMockImplementation()!;
+      mockReadTextFile.mockImplementation(async path => {
+        const content = await read(path);
+        if (path.endsWith('.tmp') && content === 'md:<p>A</p>') {
+          entered.resolve();
+          await release.promise;
+        }
+        return content;
+      });
+      const older = operations.saveFileAs();
+      dialog.resolve('/test/file.md');
+      try {
+        await entered.promise;
+        editB();
+        mockSaveDialog.mockResolvedValueOnce('/test/new.md');
+        await operations.saveFileAs();
+        const current = { ...tab };
+        release.resolve();
+        await older;
+
+        expect(mockFiles.get('/test/file.md')).toBe('# hello');
+        expect(mockFiles.get('/test/new.md')).toBe('md:<p>B</p>');
+        expect(mockRename).toHaveBeenCalledTimes(1);
+        expect([...mockFiles.keys()].sort()).toEqual(['/test/file.md', '/test/new.md']);
+        expect({ ...tab }).toEqual(current);
+      } finally { release.resolve(); await older; }
+    });
+
+    it.each(['write failure', 'cancelled dialog'])('allows delayed A after a newer %s', async outcome => {
+      const { tab, dialog, operations, editB } = fixture();
+      const older = operations.saveFileAs();
+      try {
+        editB();
+        if (outcome === 'write failure') {
+          mockRename.mockRejectedValueOnce(new Error('B failed'));
+          expect(await operations.saveFile()).toBe(false);
+        } else {
+          mockSaveDialog.mockResolvedValueOnce(null);
+          await operations.saveFileAs();
+        }
+        expect(mockFiles.get('/test/file.md')).toBe('# hello');
+        dialog.resolve('/test/file.md');
+        await older;
+        expect(mockFiles.get('/test/file.md')).toBe('md:<p>A</p>');
+        expect(tab.filePath).toBe('/test/file.md');
+        expect(tab.originalMarkdown).toBe('md:<p>A</p>');
+        expect(tab.markdown).toBe('md:<p>B</p>');
+        expect(tab.content).toBe('<p>B</p>');
+        expect(tab.hasChanges).toBe(true);
+      } finally { dialog.resolve(null); await older; }
+    });
+
+    it('leaves the successful B and document unchanged when A cancels its dialog', async () => {
+      const { tab, dialog, operations, editB } = fixture();
+      const older = operations.saveFileAs();
+      editB();
+      expect(await operations.saveFile()).toBe(true);
+      const current = { ...tab };
+      dialog.resolve(null);
+      await older;
+      expect(mockFiles.get('/test/file.md')).toBe('md:<p>B</p>');
+      expect(mockWriteTextFile).toHaveBeenCalledTimes(2);
+      expect({ ...tab }).toEqual(current);
     });
   });
 

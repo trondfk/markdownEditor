@@ -27,17 +27,25 @@ async function saveAs(page: import('@playwright/test').Page, savePath: string) {
 // ============================================================
 
 test.describe('Atomic Save — write .tmp → rename', () => {
-  test('overlapping saves keep separate verified temporary snapshots', async ({ page }) => {
+  test('overlapping saves commit verified snapshots in FIFO order and leave B on disk', async ({ page }) => {
     let entered!: () => void, release!: () => void;
     const started = new Promise<void>(resolve => { entered = resolve; });
     const pending = new Promise<void>(resolve => { release = resolve; });
+    let enteredB!: () => void, releaseB!: () => void;
+    const startedB = new Promise<void>(resolve => { enteredB = resolve; });
+    const pendingB = new Promise<void>(resolve => { releaseB = resolve; });
+    let diskBeforeB: string | undefined;
     let renames = 0;
     const { getFs, getCalls } = await setupTauriMocks(page, {
       initialFs: { [SAMPLE_PATH]: SAMPLE_MD },
       openFilePath: SAMPLE_PATH,
       beforeRename: async () => {
-        if (++renames !== 1) return;
-        entered(); await pending;
+        if (++renames === 1) {
+          entered(); await pending;
+        } else if (renames === 2) {
+          diskBeforeB = getFs()[SAMPLE_PATH];
+          enteredB(); await pendingB;
+        }
       },
     });
     try {
@@ -52,16 +60,28 @@ test.describe('Atomic Save — write .tmp → rename', () => {
       await started;
       await fillCodeEditor(page, '# Snapshot B');
       await page.keyboard.press('Control+Shift+s');
-      await expect.poll(() => getFs()[SAMPLE_PATH]).toBe('# Snapshot B');
+      expect(getFs()[SAMPLE_PATH]).toBe(SAMPLE_MD);
+      expect(getCalls().filter(call => call.cmd === 'rename')).toHaveLength(1);
+      release();
+      await startedB;
+      expect(diskBeforeB).toBe('# Snapshot A');
+      expect(getFs()[SAMPLE_PATH]).toBe('# Snapshot A');
       const paths = getCalls().filter(call => call.cmd === 'rename')
         .map(call => (call.args as { from: string }).from);
       expect(new Set(paths).size).toBe(2);
-      expect(getFs()[paths[0]]).toBe('# Snapshot A');
-      release();
-      // Replacement order is independent of temporary-file ownership.
-      await expect.poll(() => getFs()[SAMPLE_PATH]).toBe('# Snapshot A');
+      expect(getFs()[paths[0]]).toBeUndefined();
+      expect(getFs()[paths[1]]).toBe('# Snapshot B');
+      for (const path of paths) {
+        expect(getCalls()).toContainEqual({ cmd: 'read', args: path });
+        expect(getCalls()).toContainEqual({ cmd: 'write', args: {
+          path, content: '', options: { createNew: true },
+        } });
+      }
+      releaseB();
+      await expect.poll(() => getFs()[SAMPLE_PATH]).toBe('# Snapshot B');
+      await expect(page.locator('.tab.active .tab-unsaved')).not.toBeVisible();
       expect(Object.keys(getFs()).filter(path => path.endsWith('.tmp'))).toEqual([]);
-    } finally { release(); }
+    } finally { release(); releaseB(); }
   });
 
   test('saves via .tmp file that is then renamed to final path', async ({ page }) => {

@@ -33,7 +33,7 @@ const fsMocks = vi.hoisted(() => {
 
 vi.mock('@tauri-apps/plugin-fs', () => fsMocks);
 
-import { atomicWriteTextFile } from '../../utils/atomic-write';
+import { atomicWriteTextFile, AtomicWriteCancelledError } from '../../utils/atomic-write';
 
 const TARGET = 'D:/notes/thesis.md';
 function deferred() {
@@ -215,6 +215,223 @@ describe('atomicWriteTextFile', () => {
       expect(fsMocks.files.get(TARGET)).toBe('A');
       expect([...fsMocks.files.keys()]).toEqual([TARGET]);
     } finally { release.resolve(); await Promise.allSettled([first]); }
+  });
+
+  it('queues B behind A and leaves B on disk after both saves complete', async () => {
+    const entered = deferred(), release = deferred();
+    const replacements: string[] = [];
+    fsMocks.files.set(TARGET, 'Original');
+    fsMocks.rename.mockImplementation(async (from, to) => {
+      const content = await fsMocks.read(from);
+      if (content === 'A') {
+        entered.resolve();
+        await release.promise;
+      }
+      replacements.push(content);
+      await fsMocks.move(from, to);
+    });
+
+    const first = atomicWriteTextFile(TARGET, 'A');
+    let second: Promise<void> | undefined;
+    try {
+      await entered.promise;
+      second = atomicWriteTextFile(TARGET, 'B');
+      // A has reserved and written its sibling. B must not begin filesystem work.
+      expect(fsMocks.writeTextFile).toHaveBeenCalledTimes(2);
+      expect(fsMocks.rename).toHaveBeenCalledTimes(1);
+      expect(fsMocks.files.get(TARGET)).toBe('Original');
+      release.resolve();
+      await Promise.all([first, second]);
+
+      expect(replacements).toEqual(['A', 'B']);
+      expect(fsMocks.files.get(TARGET)).toBe('B');
+      expect([...fsMocks.files.keys()]).toEqual([TARGET]);
+    } finally {
+      release.resolve();
+      await Promise.allSettled([first, ...(second ? [second] : [])]);
+    }
+  });
+
+  it('reserves FIFO positions for three calls made before the first await', async () => {
+    const entered = deferred(), release = deferred();
+    const replacements: string[] = [];
+    fsMocks.rename.mockImplementation(async (from, to) => {
+      const content = await fsMocks.read(from);
+      if (content === 'A') {
+        entered.resolve();
+        await release.promise;
+      }
+      replacements.push(content);
+      await fsMocks.move(from, to);
+    });
+    const saves = ['A', 'B', 'C'].map(content => atomicWriteTextFile(TARGET, content));
+    try {
+      await entered.promise;
+      expect(fsMocks.writeTextFile).toHaveBeenCalledTimes(2);
+      expect(fsMocks.rename).toHaveBeenCalledTimes(1);
+      release.resolve();
+      await Promise.all(saves);
+      expect(replacements).toEqual(['A', 'B', 'C']);
+      expect(fsMocks.files.get(TARGET)).toBe('C');
+      expect([...fsMocks.files.keys()]).toEqual([TARGET]);
+    } finally {
+      release.resolve();
+      await Promise.allSettled(saves);
+    }
+  });
+
+  it.each(['creation', 'payload', 'readback', 'rename', 'abort', 'cleanup'])
+    ('continues the same-target queue after a %s failure', async stage => {
+      const entered = deferred(), release = deferred();
+      const error = stage === 'abort'
+        ? new DOMException('Operation aborted', 'AbortError')
+        : new Error(`${stage} failed`);
+      const fail = async () => {
+        entered.resolve();
+        await release.promise;
+        throw error;
+      };
+      fsMocks.files.set(TARGET, 'Original');
+      if (stage === 'creation' || stage === 'payload') {
+        fsMocks.writeTextFile.mockImplementationOnce(stage === 'creation' ? fail : fsMocks.write);
+        if (stage === 'payload') fsMocks.writeTextFile.mockImplementationOnce(fail);
+      } else if (stage === 'readback') {
+        fsMocks.readTextFile.mockImplementationOnce(fail);
+      } else {
+        fsMocks.rename.mockImplementationOnce(fail);
+        if (stage === 'cleanup') fsMocks.remove.mockRejectedValueOnce(new Error('Cleanup failed'));
+      }
+      const first = atomicWriteTextFile(TARGET, 'A');
+      const firstResult = Promise.allSettled([first]);
+      let second: Promise<void> | undefined;
+      try {
+        await entered.promise;
+        const writesBeforeB = fsMocks.writeTextFile.mock.calls.length;
+        second = atomicWriteTextFile(TARGET, 'B');
+        expect(fsMocks.writeTextFile).toHaveBeenCalledTimes(writesBeforeB);
+        expect(fsMocks.files.get(TARGET)).toBe('Original');
+        release.resolve();
+        expect((await firstResult)[0]).toMatchObject({ status: 'rejected', reason: error });
+        await second;
+        expect(fsMocks.files.get(TARGET)).toBe('B');
+        const temporaryA = fsMocks.writeTextFile.mock.calls[0][0];
+        const renameCalls = fsMocks.rename.mock.calls;
+        const temporaryB = renameCalls[renameCalls.length - 1][0];
+        expect(fsMocks.files.has(temporaryB)).toBe(false);
+        if (stage === 'cleanup') {
+          expect([...fsMocks.files.keys()].sort()).toEqual([temporaryA, TARGET].sort());
+        } else {
+          expect([...fsMocks.files.keys()]).toEqual([TARGET]);
+        }
+        if (stage === 'creation') expect(fsMocks.remove).not.toHaveBeenCalled();
+
+        // The failed operation and its cleanup must not poison subsequent calls.
+        await atomicWriteTextFile(TARGET, 'C');
+        expect(fsMocks.files.get(TARGET)).toBe('C');
+      } finally {
+        release.resolve();
+        await Promise.allSettled([first, ...(second ? [second] : [])]);
+      }
+    });
+
+  it('does not block a different target while A is paused before rename', async () => {
+    const otherTarget = 'D:/notes/other.md';
+    const entered = deferred(), release = deferred();
+    fsMocks.files.set(TARGET, 'Original');
+    fsMocks.rename.mockImplementationOnce(async (from, to) => {
+      entered.resolve();
+      await release.promise;
+      await fsMocks.move(from, to);
+    });
+    const first = atomicWriteTextFile(TARGET, 'A');
+    try {
+      await entered.promise;
+      await atomicWriteTextFile(otherTarget, 'Other');
+      expect(fsMocks.files.get(otherTarget)).toBe('Other');
+      expect(fsMocks.files.get(TARGET)).toBe('Original');
+      release.resolve();
+      await first;
+      expect(fsMocks.files.get(TARGET)).toBe('A');
+      expect([...fsMocks.files.keys()].sort()).toEqual([TARGET, otherTarget].sort());
+    } finally {
+      release.resolve();
+      await Promise.allSettled([first]);
+    }
+  });
+
+  it('rejects an ineligible queued write without filesystem work and continues the queue', async () => {
+    const onCommitted = vi.fn();
+    const first = Promise.allSettled([atomicWriteTextFile(TARGET, 'A', {
+      canWrite: () => false, onCommitted,
+    })]);
+    const second = atomicWriteTextFile(TARGET, 'B');
+    expect((await first)[0]).toMatchObject({ status: 'rejected', reason: expect.any(AtomicWriteCancelledError) });
+    await second;
+    expect(fsMocks.writeTextFile.mock.calls.map(([, content]) => content)).toEqual(['', 'B']);
+    expect(fsMocks.rename).toHaveBeenCalledTimes(1);
+    expect(fsMocks.remove).not.toHaveBeenCalled();
+    expect(onCommitted).not.toHaveBeenCalled();
+    expect(fsMocks.files.get(TARGET)).toBe('B');
+  });
+
+  it('rechecks eligibility after readback and cleans up only its owned sibling', async () => {
+    const entered = deferred(), release = deferred();
+    const onCommitted = vi.fn();
+    const otherSibling = 'D:/notes/mermark-other-operation.tmp';
+    let eligible = true;
+    fsMocks.files.set(TARGET, 'Original');
+    fsMocks.files.set(otherSibling, 'Another operation');
+    fsMocks.readTextFile.mockImplementationOnce(async path => {
+      const content = await fsMocks.read(path);
+      entered.resolve();
+      await release.promise;
+      return content;
+    });
+    const first = Promise.allSettled([atomicWriteTextFile(TARGET, 'A', {
+      canWrite: () => eligible, onCommitted,
+    })]);
+    try {
+      await entered.promise;
+      eligible = false;
+      release.resolve();
+      expect((await first)[0]).toMatchObject({ status: 'rejected', reason: expect.any(AtomicWriteCancelledError) });
+      expect(fsMocks.rename).not.toHaveBeenCalled();
+      expect(onCommitted).not.toHaveBeenCalled();
+      expect(fsMocks.remove).toHaveBeenCalledExactlyOnceWith(fsMocks.writeTextFile.mock.calls[0][0]);
+      expect([...fsMocks.files.entries()]).toEqual([[TARGET, 'Original'], [otherSibling, 'Another operation']]);
+      await atomicWriteTextFile(TARGET, 'B');
+      expect(fsMocks.files.get(TARGET)).toBe('B');
+      expect(fsMocks.files.get(otherSibling)).toBe('Another operation');
+    } finally { release.resolve(); await first; }
+  });
+
+  it('records a commit before the next queue job checks its eligibility', async () => {
+    const committed: string[] = [];
+    const first = atomicWriteTextFile(TARGET, 'A', { onCommitted: () => committed.push('A') });
+    const second = atomicWriteTextFile(TARGET, 'B', {
+      canWrite: () => { expect(committed).toEqual(['A']); return true; },
+      onCommitted: () => committed.push('B'),
+    });
+    await Promise.all([first, second]);
+    expect(committed).toEqual(['A', 'B']);
+    expect(fsMocks.files.get(TARGET)).toBe('B');
+  });
+
+  it.each(['creation', 'payload', 'readback', 'rename'])('does not record a successful commit after %s fails', async stage => {
+    const onCommitted = vi.fn();
+    const error = new Error(`${stage} failed`);
+    fsMocks.files.set(TARGET, 'Original');
+    if (stage === 'creation') fsMocks.writeTextFile.mockRejectedValueOnce(error);
+    if (stage === 'payload') fsMocks.writeTextFile.mockImplementationOnce(fsMocks.write).mockRejectedValueOnce(error);
+    if (stage === 'readback') fsMocks.readTextFile.mockRejectedValueOnce(error);
+    if (stage === 'rename') fsMocks.rename.mockRejectedValueOnce(error);
+
+    await expect(atomicWriteTextFile(TARGET, 'A', { canWrite: () => true, onCommitted })).rejects.toBe(error);
+    expect(onCommitted).not.toHaveBeenCalled();
+    expect([...fsMocks.files.entries()]).toEqual([[TARGET, 'Original']]);
+    await atomicWriteTextFile(TARGET, 'B', { onCommitted });
+    expect(onCommitted).toHaveBeenCalledTimes(1);
+    expect(fsMocks.files.get(TARGET)).toBe('B');
   });
 
   it('does not rename a competing save\'s partially written file onto the destination', async () => {

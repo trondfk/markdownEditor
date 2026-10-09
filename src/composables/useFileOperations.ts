@@ -3,9 +3,9 @@ import { open, save } from '@tauri-apps/plugin-dialog';
 import { readTextFile } from '@tauri-apps/plugin-fs';
 import { open as openExternal } from '@tauri-apps/plugin-shell';
 import { htmlToMarkdown, markdownToHtml, detectLineEnding, applyLineEnding, generateSlug } from '../utils/markdown-converter';
-import { atomicWriteTextFile } from '../utils/atomic-write';
+import { atomicWriteTextFile, AtomicWriteCancelledError } from '../utils/atomic-write';
 import { auditShrink } from '../utils/save-audit';
-import { captureSaveState, completeSave, setDocumentMarkdown, type SaveState } from '../utils/save-state';
+import { canCommitSave, captureSaveState, completeSave, getDocumentMarkdown, getLastCommittedSave, recordSaveCommit, setDocumentMarkdown, type SaveState } from '../utils/save-state';
 import { t } from '../i18n';
 import { aiCommands } from '../services/aiCommands';
 import type { Tab } from './useTabs';
@@ -195,14 +195,22 @@ export function useFileOperations(options: UseFileOperationsOptions): UseFileOpe
     }
   };
 
-  const atomicWriteFile = async (filePath: string, content: string): Promise<void> => {
+  const atomicWriteFile = async (filePath: string, content: string, state: SaveState): Promise<void> => {
+    const previousDiskContent = state.tab.originalMarkdown ?? '';
     try {
       markSaveStart?.(filePath);
-      await atomicWriteTextFile(filePath, content);
-    } finally {
-      // Release the watcher guard whether or not the write landed, otherwise a
-      // failed save leaves the file looking permanently mid-write.
-      markSaveEnd?.(filePath, content);
+      await atomicWriteTextFile(filePath, content, {
+        canWrite: () => canCommitSave(state),
+        onCommitted: () => {
+          recordSaveCommit(state, filePath, content);
+          markSaveEnd?.(filePath, content);
+        },
+      });
+    } catch (error) {
+      const committed = getLastCommittedSave(state);
+      // Release the guard without claiming failed or cancelled content reached disk.
+      markSaveEnd?.(filePath, committed?.filePath === filePath ? committed.markdown : previousDiskContent);
+      throw error;
     }
   };
 
@@ -233,6 +241,7 @@ export function useFileOperations(options: UseFileOperationsOptions): UseFileOpe
     let { state } = prepared;
     const { tab } = state;
     let { markdown } = prepared;
+    if (!canCommitSave(state)) throw new AtomicWriteCancelledError();
 
     // Pre-save conflict check
     if (onPreSaveConflict) {
@@ -240,19 +249,20 @@ export function useFileOperations(options: UseFileOperationsOptions): UseFileOpe
       if (diskContent !== null) {
         const decision = await onPreSaveConflict(filePath, diskContent, markdown);
         if (decision === 'cancel') return false;
-        if (tab.filePath !== state.filePath) return false;
+        if (!canCommitSave(state)) throw new AtomicWriteCancelledError();
         // If user applied a manual merge, use the merged content instead.
         // The merged source becomes the snapshot actually written to disk.
         if (decision !== 'save') {
           markdown = decision;
-          state = captureSaveState(tab, markdown);
+          setDocumentMarkdown(tab, markdown);
+          state = { ...state, revision: tab.editRevision ?? 0, markdown: getDocumentMarkdown(tab) };
         }
       }
     }
 
     auditShrink('manual-save', filePath, markdown, tab.originalMarkdown);
 
-    await atomicWriteFile(filePath, markdown);
+    await atomicWriteFile(filePath, markdown, state);
 
     const saved = completeSave(state, filePath, markdown);
 
@@ -289,7 +299,7 @@ export function useFileOperations(options: UseFileOperationsOptions): UseFileOpe
         return await writeAndUpdateTab(filePath, prepared);
       }
     } catch (error) {
-      console.error('Error saving file:', error);
+      if (!(error instanceof AtomicWriteCancelledError)) console.error('Error saving file:', error);
     }
     return false;
   };
@@ -318,7 +328,7 @@ export function useFileOperations(options: UseFileOperationsOptions): UseFileOpe
         }
       }
     } catch (error) {
-      console.error('Error saving file:', error);
+      if (!(error instanceof AtomicWriteCancelledError)) console.error('Error saving file:', error);
     }
   };
 
