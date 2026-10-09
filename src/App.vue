@@ -54,6 +54,7 @@ import { useSplitView } from './composables/useSplitView';
 import type { Tab } from './composables/useTabs';
 import { useTabSerializer } from './composables/useTabSerializer';
 import { useFileOperations } from './composables/useFileOperations';
+import { useFileOpening } from './composables/useFileOpening';
 import { useCloseConfirmation } from './composables/useCloseConfirmation';
 import { wouldTruncateDocument } from './utils/save-guard';
 import { atomicWriteTextFile } from './utils/atomic-write';
@@ -1459,7 +1460,7 @@ const insertImageIntoActivePane = (path: string) => {
 const handleWorkspaceOpenFile = (path: string) => {
   if (isImageFile(path)) return;
   // eslint-disable-next-line @typescript-eslint/no-use-before-define
-  openFileWithCrossWindowCheck(path).catch((e) => console.error('[App] open from workspace:', e));
+  openFileWithAtomicOwnership(path).catch((e) => console.error('[App] open from workspace:', e));
 };
 
 const handleWorkspaceDropFile = (paneId: string, path: string) => {
@@ -1469,7 +1470,7 @@ const handleWorkspaceDropFile = (paneId: string, path: string) => {
     return;
   }
   // eslint-disable-next-line @typescript-eslint/no-use-before-define
-  openFileWithCrossWindowCheck(path).catch((e) => console.error('[App] drop file in pane:', e));
+  openFileWithAtomicOwnership(path).catch((e) => console.error('[App] drop file in pane:', e));
 };
 const handleWorkspaceDropInPane = (payload: { paneId: string; paths: string[] }) => {
   for (const path of payload.paths) handleWorkspaceDropFile(payload.paneId, path);
@@ -1843,6 +1844,30 @@ const importDocumentsIntoWorkspace = async (paths: string[], directory: string):
   return imported;
 };
 
+const fileOpening = useFileOpening({
+  getWindowLabel: getCurrentWindowLabel,
+  registerOpenFile,
+  unregisterOpenFile,
+  focusWindowWithFile,
+  findLocalFile: path => !!findTabByFilePathSplit(path),
+  activateLocalFile: async path => {
+    const result = findTabByFilePathSplit(path);
+    if (result) {
+      splitState.value.activePaneId = result.pane.id;
+      await switchTab(result.pane.id, result.tab.id);
+    }
+  },
+  loadFile: openFileFromPath,
+});
+
+const openFileWithAtomicOwnership = async (filePath: string): Promise<void> => {
+  try {
+    await fileOpening.openFile(filePath);
+  } catch (error) {
+    console.error('[App] Error claiming or opening file:', error);
+  }
+};
+
 // Wrapper that checks if file is open locally or in another window first
 const openFileWithCrossWindowCheck = async (filePath: string): Promise<void> => {
   try {
@@ -1891,7 +1916,7 @@ const openFileWithCrossWindowDialog = async (): Promise<void> => {
 
     if (selected) {
       const filePath = selected as string;
-      await openFileWithCrossWindowCheck(filePath);
+      await openFileWithAtomicOwnership(filePath);
     }
   } catch (error) {
     console.error('[App] Error opening file dialog:', error);
@@ -1942,7 +1967,7 @@ onMounted(async () => {
   try {
     unlistenOpenFile = await listen<string>('open-file', (event) => {
       hasExplicitFile = true;
-      openFileWithCrossWindowCheck(event.payload);
+      openFileWithAtomicOwnership(event.payload);
     });
   } catch (error) {
     console.error('Failed to listen for open-file events:', error);
@@ -1952,7 +1977,7 @@ onMounted(async () => {
     hasExplicitFile = true;
     console.log('[App] Opening file from URL:', urlFilePath);
     await nextTick();
-    setTimeout(() => openFileWithCrossWindowCheck(urlFilePath), 100);
+    setTimeout(() => openFileWithAtomicOwnership(urlFilePath), 100);
   } else if (!transferWindow) {
     // Check for file path from CLI arguments (for main window / file associations)
     try {
@@ -1960,7 +1985,7 @@ onMounted(async () => {
       if (filePath) {
         hasExplicitFile = true;
         await nextTick();
-        setTimeout(() => openFileWithCrossWindowCheck(filePath), 100);
+        setTimeout(() => openFileWithAtomicOwnership(filePath), 100);
       }
     } catch (error) {
       console.error('Failed to read the file path to open:', error);
@@ -1975,7 +2000,7 @@ onMounted(async () => {
       for (const pane of session.panes) {
         for (const tab of pane.tabs) {
           try {
-            await openFileWithCrossWindowCheck(tab.filePath);
+            await openFileWithAtomicOwnership(tab.filePath);
           } catch {
             // File may have been deleted since last session
           }
@@ -2054,7 +2079,7 @@ onMounted(async () => {
           ? await importDocumentsIntoWorkspace(docPaths, importTarget)
           : docPaths;
         for (const filePath of pathsToOpen) {
-          await openFileWithCrossWindowCheck(filePath);
+          await openFileWithAtomicOwnership(filePath);
         }
 
         if (position) {
@@ -2133,7 +2158,7 @@ onUnmounted(async () => {
       :ai-active="aiPanelOpen"
       @new-file="newFile"
       @open-file="openFileWithCrossWindowDialog"
-      @open-recent="openFileWithCrossWindowCheck"
+      @open-recent="openFileWithAtomicOwnership"
       @open-workspace="handleOpenWorkspaceFromToolbar"
       @open-recent-workspace="handleOpenRecentWorkspaceFromToolbar"
       @save-file="saveFile"
@@ -2195,7 +2220,7 @@ onUnmounted(async () => {
         :ai-active="aiPanelOpen"
         @new-file="newFile"
         @open-file="openFileWithCrossWindowDialog"
-        @open-recent="openFileWithCrossWindowCheck"
+        @open-recent="openFileWithAtomicOwnership"
         @open-workspace="handleOpenWorkspaceFromToolbar"
         @open-recent-workspace="handleOpenRecentWorkspaceFromToolbar"
         @save-file="saveFile"
@@ -2359,7 +2384,7 @@ onUnmounted(async () => {
       :ai-active="aiPanelOpen"
       @new-file="newFile"
       @open-file="openFileWithCrossWindowDialog"
-      @open-recent="openFileWithCrossWindowCheck"
+      @open-recent="openFileWithAtomicOwnership"
       @open-workspace="handleOpenWorkspaceFromToolbar"
       @open-recent-workspace="handleOpenRecentWorkspaceFromToolbar"
       @save-file="saveFile"

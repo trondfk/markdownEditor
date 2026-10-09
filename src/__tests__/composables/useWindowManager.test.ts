@@ -29,7 +29,73 @@ describe('useWindowManager', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    (window as unknown as Record<string, unknown>).__mermarkFileOpeningInstance = 'frontend-1';
     windowManager = useWindowManager();
+  });
+
+  afterEach(() => {
+    delete (window as unknown as Record<string, unknown>).__mermarkFileOpeningInstance;
+    vi.useRealTimers();
+  });
+
+  describe('file-opening frontend identity', () => {
+    it('sends the native instance with claims and both forms of release', async () => {
+      await windowManager.registerOpenFile('/test.md', 'main');
+      await windowManager.unregisterOpenFile('/test.md');
+      await windowManager.unregisterWindowFiles('main');
+      expect(invoke).toHaveBeenCalledWith('register_open_file', {
+        filePath: '/test.md', windowLabel: 'main', frontendInstance: 'frontend-1',
+      });
+      expect(invoke).toHaveBeenCalledWith('unregister_open_file', {
+        filePath: '/test.md', frontendInstance: 'frontend-1',
+      });
+      expect(invoke).toHaveBeenCalledWith('unregister_window_files', {
+        windowLabel: 'main', frontendInstance: 'frontend-1',
+      });
+    });
+
+    it('waits for native page-load readiness before registering', async () => {
+      delete (window as unknown as Record<string, unknown>).__mermarkFileOpeningInstance;
+      const pending = windowManager.registerOpenFile('/test.md', 'main');
+      expect(invoke).not.toHaveBeenCalled();
+      window.dispatchEvent(new Event('mermark-file-opening-ready'));
+      expect(invoke).not.toHaveBeenCalled();
+      (window as unknown as Record<string, unknown>).__mermarkFileOpeningInstance = 'loaded-frontend';
+      window.dispatchEvent(new Event('mermark-file-opening-ready'));
+      await pending;
+      expect(invoke).toHaveBeenCalledExactlyOnceWith('register_open_file', {
+        filePath: '/test.md', windowLabel: 'main', frontendInstance: 'loaded-frontend',
+      });
+    });
+
+    it('does not mint an identity or register when native readiness is unavailable', async () => {
+      vi.useFakeTimers();
+      delete (window as unknown as Record<string, unknown>).__mermarkFileOpeningInstance;
+      const result = expect(windowManager.registerOpenFile('/test.md', 'main'))
+        .rejects.toThrow('Native file-opening instance is unavailable');
+      await vi.advanceTimersByTimeAsync(10_000);
+      await result;
+      expect(invoke).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it('keeps delayed old-client releases bound to the retired instance after reload', async () => {
+      await windowManager.registerOpenFile('/test.md', 'main');
+      (window as unknown as Record<string, unknown>).__mermarkFileOpeningInstance = 'frontend-2';
+      const reloaded = useWindowManager();
+      await reloaded.registerOpenFile('/test.md', 'main');
+      await windowManager.unregisterOpenFile('/test.md');
+      await reloaded.unregisterOpenFile('/test.md');
+      expect(invoke).toHaveBeenNthCalledWith(2, 'register_open_file', {
+        filePath: '/test.md', windowLabel: 'main', frontendInstance: 'frontend-2',
+      });
+      expect(invoke).toHaveBeenNthCalledWith(3, 'unregister_open_file', {
+        filePath: '/test.md', frontendInstance: 'frontend-1',
+      });
+      expect(invoke).toHaveBeenNthCalledWith(4, 'unregister_open_file', {
+        filePath: '/test.md', frontendInstance: 'frontend-2',
+      });
+    });
   });
 
   describe('createNewWindow', () => {

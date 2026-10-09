@@ -9,7 +9,33 @@ export interface TabTransferPayload {
   target_window: string;
 }
 
+export interface OpenFileClaim {
+  file_path: string;
+  window_label: string;
+  acquired: boolean;
+}
+
 export function useWindowManager() {
+  let frontendInstance: Promise<string> | undefined;
+  const getFrontendInstance = (): Promise<string> => {
+    frontendInstance ??= new Promise<string>((resolve, reject) => {
+      const ready = () => {
+        const instance = (window as unknown as Record<string, unknown>).__mermarkFileOpeningInstance;
+        if (typeof instance !== 'string' || !instance) return;
+        clearTimeout(timeout);
+        window.removeEventListener('mermark-file-opening-ready', ready);
+        resolve(instance);
+      };
+      const timeout = setTimeout(() => {
+        window.removeEventListener('mermark-file-opening-ready', ready);
+        reject(new Error('Native file-opening instance is unavailable'));
+      }, 10_000);
+      window.addEventListener('mermark-file-opening-ready', ready);
+      ready();
+    });
+    return frontendInstance;
+  };
+
   const createNewWindow = async (filePath?: string | null): Promise<string> => {
     return invoke<string>('create_new_window', {
       filePath: filePath || null,
@@ -89,16 +115,18 @@ export function useWindowManager() {
   };
 
   // File registry functions
-  const registerOpenFile = async (filePath: string, windowLabel: string): Promise<void> => {
-    return invoke('register_open_file', { filePath, windowLabel });
+  const registerOpenFile = async (filePath: string, windowLabel: string): Promise<OpenFileClaim> => {
+    return invoke<OpenFileClaim>('register_open_file', {
+      filePath, windowLabel, frontendInstance: await getFrontendInstance(),
+    });
   };
 
   const unregisterOpenFile = async (filePath: string): Promise<void> => {
-    return invoke('unregister_open_file', { filePath });
+    return invoke('unregister_open_file', { filePath, frontendInstance: await getFrontendInstance() });
   };
 
   const unregisterWindowFiles = async (windowLabel: string): Promise<void> => {
-    return invoke('unregister_window_files', { windowLabel });
+    return invoke('unregister_window_files', { windowLabel, frontendInstance: await getFrontendInstance() });
   };
 
   const checkFileOpen = async (filePath: string): Promise<string | null> => {

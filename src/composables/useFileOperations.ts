@@ -54,7 +54,7 @@ export interface UseFileOperationsReturn {
   showExternalLinkDialog: Ref<boolean>;
   pendingExternalUrl: Ref<string>;
   openFile: () => Promise<void>;
-  openFileFromPath: (filePath: string) => Promise<void>;
+  openFileFromPath: (filePath: string) => Promise<boolean>;
   saveFile: (target?: DocumentSaveTarget) => Promise<boolean>;
   saveFileAs: () => Promise<void>;
   handleLinkClick: (href: string) => void;
@@ -112,12 +112,12 @@ export function useFileOperations(options: UseFileOperationsOptions): UseFileOpe
   const findActiveTabIndex = (): number =>
     tabs.value.findIndex(t => t.id === activeTabId.value);
 
-  const loadFileIntoTab = async (filePath: string): Promise<void> => {
+  const loadFileIntoTab = async (filePath: string): Promise<boolean> => {
     // Check if file is already open
     const existingTab = findTabByFilePath(filePath);
     if (existingTab) {
       await switchToTab(existingTab.id);
-      return;
+      return true;
     }
 
     const fileContent = await readTextFile(filePath);
@@ -138,7 +138,7 @@ export function useFileOperations(options: UseFileOperationsOptions): UseFileOpe
       if (!isLarge) setEditorContent(htmlContent);
     } else {
       const newTabId = createNewTab(filePath, htmlContent, fileName);
-      if (!newTabId) return;
+      if (!newTabId) return false;
       const newTab = tabs.value.find(t => t.id === newTabId);
       if (newTab) {
         newTab.originalMarkdown = fileContent;
@@ -151,6 +151,7 @@ export function useFileOperations(options: UseFileOperationsOptions): UseFileOpe
 
     if (isLarge) onLargeFileOpened?.(filePath, fileContent);
     onFileOpened?.(filePath, fileContent);
+    return true;
   };
 
   const openFile = async (): Promise<void> => {
@@ -171,11 +172,12 @@ export function useFileOperations(options: UseFileOperationsOptions): UseFileOpe
     }
   };
 
-  const openFileFromPath = async (filePath: string): Promise<void> => {
+  const openFileFromPath = async (filePath: string): Promise<boolean> => {
     try {
-      await loadFileIntoTab(filePath);
+      return await loadFileIntoTab(filePath);
     } catch (error) {
       console.error('Error opening file from path:', error);
+      return false;
     }
   };
 

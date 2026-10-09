@@ -13,7 +13,376 @@ mod ai;
 pub struct OpenFileState(pub Mutex<Option<String>>);
 
 // Global registry of open files: file_path -> window_label
-pub struct OpenFilesRegistry(pub Mutex<HashMap<String, String>>);
+pub struct OpenFilesRegistry(pub Mutex<OpenFileRegistryState>);
+
+#[derive(Debug, Default)]
+pub struct OpenFileRegistryState {
+    files: HashMap<String, String>,
+    frontend_instances: HashMap<String, String>,
+}
+
+fn frontend_loaded(registry: &OpenFilesRegistry, window_label: &str) -> Result<String, String> {
+    let mut state = registry.0.lock().map_err(|_| "Open-file registry is unavailable")?;
+    let instance = uuid::Uuid::new_v4().to_string();
+    // A completed native page load has replaced the previous frontend. Retire
+    // only that window's documents, under the same lock used for claiming them.
+    state.files.retain(|_, owner| owner != window_label);
+    state.frontend_instances.insert(window_label.to_string(), instance.clone());
+    Ok(instance)
+}
+
+fn validate_frontend_instance(state: &OpenFileRegistryState, window_label: &str, instance: &str) -> Result<(), String> {
+    if state.frontend_instances.get(window_label).map(String::as_str) != Some(instance) {
+        return Err("The file-opening frontend instance is no longer current".into());
+    }
+    Ok(())
+}
+
+#[derive(Debug, Serialize)]
+pub struct OpenFileClaim {
+    file_path: String,
+    window_label: String,
+    acquired: bool,
+}
+
+fn normalize_open_file(file_path: &str) -> Result<String, String> {
+    let path = std::fs::canonicalize(file_path).map_err(|error| error.to_string())?;
+    let metadata = std::fs::metadata(&path).map_err(|error| error.to_string())?;
+    if !metadata.is_file() {
+        return Err("Only existing regular files can be opened".into());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if metadata.nlink() != 1 {
+            return Err("Hardlinked files do not have an unambiguous ownership path".into());
+        }
+    }
+    #[cfg(windows)]
+    validate_windows_open_file(&path)?;
+    #[cfg(not(any(unix, windows)))]
+    return Err("File ownership is not supported on this platform".into());
+    path.into_os_string().into_string().map_err(|_| "Non-Unicode ownership paths are unsupported".into())
+}
+
+#[cfg(windows)]
+fn validate_windows_open_file(path: &Path) -> Result<(), String> {
+    use std::os::windows::{ffi::OsStrExt, io::{AsRawHandle, FromRawHandle}};
+    use std::path::{Component, Prefix};
+    use std::ffi::c_void;
+    #[repr(C)]
+    #[derive(Default)]
+    struct Information {
+        attributes: u32, times: [u32; 6], volume: u32,
+        size_high: u32, size_low: u32, links: u32, index_high: u32, index_low: u32,
+    }
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn CreateFileW(path: *const u16, access: u32, share: u32, security: *const c_void,
+            disposition: u32, flags: u32, template: *mut c_void) -> *mut c_void;
+        fn GetFileInformationByHandle(handle: *mut c_void, information: *mut Information) -> i32;
+        fn GetDriveTypeW(root: *const u16) -> u32;
+    }
+    let drive = match path.components().next() {
+        Some(Component::Prefix(prefix)) => match prefix.kind() {
+            Prefix::Disk(drive) | Prefix::VerbatimDisk(drive) => drive,
+            _ => return Err("Network and device ownership paths are unsupported".into()),
+        },
+        _ => return Err("Missing local Windows volume".into()),
+    };
+    let root = [drive as u16, b':' as u16, b'\\' as u16, 0];
+    // SAFETY: a terminated DOS root; only fixed local volumes are accepted.
+    if unsafe { GetDriveTypeW(root.as_ptr()) } != 3 {
+        return Err("Only fixed local Windows volumes are supported".into());
+    }
+    let name = path.as_os_str().encode_wide().chain(Some(0)).collect::<Vec<_>>();
+    // SAFETY: a terminated canonical path. OPEN_REPARSE_POINT avoids following
+    // a replacement link; the returned successful handle is owned by File.
+    let handle = unsafe { CreateFileW(name.as_ptr(), 0x80, 7, std::ptr::null(), 3, 0x200000, std::ptr::null_mut()) };
+    if handle as isize == -1 { return Err(std::io::Error::last_os_error().to_string()); }
+    let file = unsafe { std::fs::File::from_raw_handle(handle) };
+    let mut information = Information::default();
+    // SAFETY: live handle and a writable BY_HANDLE_FILE_INFORMATION buffer.
+    if unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut information) } == 0 {
+        return Err(std::io::Error::last_os_error().to_string());
+    }
+    if information.links != 1 || information.attributes & (0x400 | 0x10) != 0 {
+        return Err("Hardlinks, unresolved reparse points and directories are unsupported".into());
+    }
+    Ok(())
+}
+
+fn claim_open_file(registry: &OpenFilesRegistry, file_path: &str, window_label: &str, instance: &str) -> Result<OpenFileClaim, String> {
+    let file_path = normalize_open_file(file_path)?;
+    let mut state = registry.0.lock().map_err(|_| "Open-file registry is unavailable")?;
+    validate_frontend_instance(&state, window_label, instance)?;
+    let files = &mut state.files;
+    if let Some(owner) = files.get(&file_path) {
+        return Ok(OpenFileClaim { file_path, window_label: owner.clone(), acquired: false });
+    }
+    files.insert(file_path.clone(), window_label.to_string());
+    Ok(OpenFileClaim { file_path, window_label: window_label.to_string(), acquired: true })
+}
+
+fn release_open_file(registry: &OpenFilesRegistry, file_path: &str, window_label: &str, instance: &str) -> Result<bool, String> {
+    let mut state = registry.0.lock().map_err(|_| "Open-file registry is unavailable")?;
+    validate_frontend_instance(&state, window_label, instance)?;
+    let files = &mut state.files;
+    // An opened file may have been deleted. Its registered canonical key still
+    // permits an owner-checked release without accessing the missing file.
+    let key = if files.contains_key(file_path) { file_path.to_string() } else { normalize_open_file(file_path)? };
+    if files.get(&key).map(String::as_str) != Some(window_label) { return Ok(false); }
+    files.remove(&key);
+    Ok(true)
+}
+
+#[cfg(test)]
+mod open_file_registry_tests {
+    use super::*;
+    use std::sync::{Arc, Barrier};
+
+    struct Fixture(PathBuf);
+    impl Fixture {
+        fn new() -> Self {
+            let directory = std::env::temp_dir().join(format!("mermark-open-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir(&directory).unwrap();
+            std::fs::write(directory.join("document.md"), "Original").unwrap();
+            Self(directory)
+        }
+        fn path(&self) -> String { self.0.join("document.md").to_str().unwrap().to_string() }
+    }
+    impl Drop for Fixture {
+        fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.0); }
+    }
+
+    fn registry() -> OpenFilesRegistry { OpenFilesRegistry(Mutex::new(OpenFileRegistryState::default())) }
+
+    fn instance(registry: &OpenFilesRegistry, label: &str) -> Result<String, String> {
+        let current = registry.0.lock().map_err(|_| "Open-file registry is unavailable")?
+            .frontend_instances.get(label).cloned();
+        match current { Some(instance) => Ok(instance), None => frontend_loaded(registry, label) }
+    }
+
+    fn claim(registry: &OpenFilesRegistry, path: &str, label: &str) -> Result<OpenFileClaim, String> {
+        claim_open_file(registry, path, label, &instance(registry, label)?)
+    }
+
+    fn release(registry: &OpenFilesRegistry, path: &str, label: &str) -> Result<bool, String> {
+        release_open_file(registry, path, label, &instance(registry, label)?)
+    }
+
+    #[test]
+    fn simultaneous_open_attempts_have_exactly_one_owner() {
+        let fixture = Fixture::new();
+        let registry = Arc::new(registry());
+        for index in 0..8 { frontend_loaded(&registry, &format!("window-{index}")).unwrap(); }
+        let barrier = Arc::new(Barrier::new(8));
+        let workers = (0..8).map(|index| {
+            let registry = Arc::clone(&registry);
+            let barrier = Arc::clone(&barrier);
+            let path = fixture.path();
+            std::thread::spawn(move || {
+                barrier.wait();
+                claim(&registry, &path, &format!("window-{index}")).unwrap()
+            })
+        }).collect::<Vec<_>>();
+        let claims = workers.into_iter().map(|worker| worker.join().unwrap()).collect::<Vec<_>>();
+        assert_eq!(claims.iter().filter(|claim| claim.acquired).count(), 1);
+        let owner = &claims.iter().find(|claim| claim.acquired).unwrap().window_label;
+        assert!(claims.iter().all(|claim| &claim.window_label == owner));
+        assert_eq!(registry.0.lock().unwrap().files.len(), 1);
+    }
+
+    #[test]
+    fn existing_owner_cannot_be_overwritten_even_by_same_window_retry() {
+        let fixture = Fixture::new();
+        let registry = registry();
+        let original = claim(&registry, &fixture.path(), "main").unwrap();
+        for window in ["main", "other"] {
+            let existing = claim(&registry, &fixture.path(), window).unwrap();
+            assert!(!existing.acquired);
+            assert_eq!(existing.window_label, "main");
+            assert_eq!(existing.file_path, original.file_path);
+        }
+    }
+
+    #[test]
+    fn lexical_aliases_share_the_existing_owner() {
+        let fixture = Fixture::new();
+        let registry = registry();
+        let original = claim(&registry, &fixture.path(), "main").unwrap();
+        std::fs::create_dir(fixture.0.join("child")).unwrap();
+        let alias = fixture.0.join("child/.././document.md");
+        let claim = claim(&registry, alias.to_str().unwrap(), "other").unwrap();
+        assert!(!claim.acquired);
+        assert_eq!(claim.file_path, original.file_path);
+        assert_eq!(claim.window_label, "main");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn relative_paths_share_the_existing_owner_without_changing_the_process_directory() {
+        let fixture = Fixture::new();
+        let registry = registry();
+        let original = claim(&registry, &fixture.path(), "main").unwrap();
+        let mut relative = PathBuf::new();
+        for component in std::env::current_dir().unwrap().components() {
+            if matches!(component, std::path::Component::Normal(_)) { relative.push(".."); }
+        }
+        relative.push(Path::new(&fixture.path()).strip_prefix("/").unwrap());
+        let existing = claim(&registry, relative.to_str().unwrap(), "other").unwrap();
+        assert!(!existing.acquired);
+        assert_eq!(existing.file_path, original.file_path);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symbolic_aliases_share_the_existing_owner() {
+        let fixture = Fixture::new();
+        let registry = registry();
+        let original = claim(&registry, &fixture.path(), "main").unwrap();
+        let alias = fixture.0.join("alias.md");
+        std::os::unix::fs::symlink(fixture.path(), &alias).unwrap();
+        let existing = claim(&registry, alias.to_str().unwrap(), "other").unwrap();
+        assert!(!existing.acquired);
+        assert_eq!(existing.file_path, original.file_path);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_case_aliases_share_the_existing_owner() {
+        let fixture = Fixture::new();
+        let registry = registry();
+        let original = claim(&registry, &fixture.path(), "main").unwrap();
+        let existing = claim(&registry, fixture.0.join("DOCUMENT.MD").to_str().unwrap(), "other").unwrap();
+        assert!(!existing.acquired);
+        assert_eq!(existing.file_path, original.file_path);
+    }
+
+    #[test]
+    fn missing_and_ambiguous_files_are_not_registered() {
+        let fixture = Fixture::new();
+        let registry = registry();
+        assert!(claim(&registry, fixture.0.join("missing.md").to_str().unwrap(), "main").is_err());
+        assert!(claim(&registry, fixture.0.to_str().unwrap(), "main").is_err());
+        let link = fixture.0.join("hardlink.md");
+        std::fs::hard_link(fixture.path(), &link).unwrap();
+        assert!(claim(&registry, &fixture.path(), "main").is_err());
+        assert!(registry.0.lock().unwrap().files.is_empty());
+    }
+
+    #[test]
+    fn registry_failure_is_reported_instead_of_granting_ownership() {
+        let fixture = Fixture::new();
+        let registry = Arc::new(registry());
+        let poisoned = Arc::clone(&registry);
+        let _ = std::thread::spawn(move || {
+            let _guard = poisoned.0.lock().unwrap();
+            panic!("Poison the registry for the error regression");
+        }).join();
+        assert!(claim(&registry, &fixture.path(), "main").unwrap_err().contains("unavailable"));
+        assert!(registry.0.lock().unwrap_err().into_inner().files.is_empty());
+    }
+
+    #[test]
+    fn failed_load_release_only_removes_the_current_window_owner() {
+        let fixture = Fixture::new();
+        let registry = registry();
+        let claimed = claim(&registry, &fixture.path(), "main").unwrap();
+        assert!(!release(&registry, &claimed.file_path, "other").unwrap());
+        assert!(release(&registry, &claimed.file_path, "main").unwrap());
+        assert!(claim(&registry, &fixture.path(), "other").unwrap().acquired);
+        assert!(!release(&registry, &claimed.file_path, "main").unwrap());
+        assert_eq!(registry.0.lock().unwrap().files.get(&claimed.file_path).unwrap(), "other");
+    }
+
+    #[test]
+    fn an_owner_can_release_its_registered_path_after_file_deletion() {
+        let fixture = Fixture::new();
+        let registry = registry();
+        let claim = claim(&registry, &fixture.path(), "main").unwrap();
+        std::fs::remove_file(fixture.path()).unwrap();
+        assert!(!release(&registry, &claim.file_path, "other").unwrap());
+        assert!(release(&registry, &claim.file_path, "main").unwrap());
+        assert!(registry.0.lock().unwrap().files.is_empty());
+    }
+
+    #[test]
+    fn completed_reload_retires_only_the_replaced_frontend() {
+        let fixture = Fixture::new();
+        let registry = registry();
+        let other_path = fixture.0.join("other.md");
+        std::fs::write(&other_path, "Other document").unwrap();
+        let old = frontend_loaded(&registry, "main").unwrap();
+        claim_open_file(&registry, &fixture.path(), "main", &old).unwrap();
+        let other = frontend_loaded(&registry, "other").unwrap();
+        claim_open_file(&registry, other_path.to_str().unwrap(), "other", &other).unwrap();
+
+        let current = frontend_loaded(&registry, "main").unwrap();
+        assert_ne!(old, current);
+        assert!(claim_open_file(&registry, &fixture.path(), "main", &current).unwrap().acquired);
+        let existing = claim_open_file(&registry, other_path.to_str().unwrap(), "main", &current).unwrap();
+        assert!(!existing.acquired);
+        assert_eq!(existing.window_label, "other");
+        assert_eq!(registry.0.lock().unwrap().files.len(), 2);
+        assert_eq!(std::fs::read_to_string(fixture.path()).unwrap(), "Original");
+        assert_eq!(std::fs::read_to_string(other_path).unwrap(), "Other document");
+    }
+
+    #[test]
+    fn matching_window_name_does_not_authorize_a_different_frontend() {
+        let fixture = Fixture::new();
+        let registry = registry();
+        let current = frontend_loaded(&registry, "main").unwrap();
+        claim_open_file(&registry, &fixture.path(), "main", &current).unwrap();
+        assert!(claim_open_file(&registry, &fixture.path(), "main", "unrecognized").is_err());
+        assert!(release_open_file(&registry, &fixture.path(), "main", "unrecognized").is_err());
+        assert!(!claim_open_file(&registry, &fixture.path(), "main", &current).unwrap().acquired);
+        assert_eq!(registry.0.lock().unwrap().files.len(), 1);
+    }
+
+    #[test]
+    fn delayed_commands_from_the_retired_frontend_cannot_change_new_ownership() {
+        let fixture = Fixture::new();
+        let registry = registry();
+        let old = frontend_loaded(&registry, "main").unwrap();
+        claim_open_file(&registry, &fixture.path(), "main", &old).unwrap();
+        let current = frontend_loaded(&registry, "main").unwrap();
+        let claimed = claim_open_file(&registry, &fixture.path(), "main", &current).unwrap();
+        assert!(release_open_file(&registry, &claimed.file_path, "main", &old).is_err());
+        assert!(claim_open_file(&registry, &fixture.path(), "main", &old).is_err());
+        assert_eq!(registry.0.lock().unwrap().files.get(&claimed.file_path).unwrap(), "main");
+        assert!(release_open_file(&registry, &claimed.file_path, "main", &current).unwrap());
+        assert_eq!(std::fs::read_to_string(fixture.path()).unwrap(), "Original");
+    }
+
+    #[test]
+    fn reload_and_another_window_compete_for_only_one_owner() {
+        let fixture = Fixture::new();
+        let registry = Arc::new(registry());
+        let old = frontend_loaded(&registry, "main").unwrap();
+        claim_open_file(&registry, &fixture.path(), "main", &old).unwrap();
+        let clients = [
+            ("main", frontend_loaded(&registry, "main").unwrap()),
+            ("other", frontend_loaded(&registry, "other").unwrap()),
+        ];
+        let barrier = Arc::new(Barrier::new(2));
+        let workers = clients.into_iter().map(|(label, instance)| {
+            let registry = Arc::clone(&registry);
+            let barrier = Arc::clone(&barrier);
+            let path = fixture.path();
+            std::thread::spawn(move || {
+                barrier.wait();
+                claim_open_file(&registry, &path, label, &instance).unwrap()
+            })
+        }).collect::<Vec<_>>();
+        let claims = workers.into_iter().map(|worker| worker.join().unwrap()).collect::<Vec<_>>();
+        assert_eq!(claims.iter().filter(|claim| claim.acquired).count(), 1);
+        assert_eq!(claims[0].window_label, claims[1].window_label);
+        assert_eq!(registry.0.lock().unwrap().files.len(), 1);
+        assert_eq!(std::fs::read_to_string(fixture.path()).unwrap(), "Original");
+    }
+}
 
 // Counter for unique window IDs
 static WINDOW_COUNTER: AtomicU32 = AtomicU32::new(1);
@@ -44,31 +413,39 @@ fn get_open_file_path(state: tauri::State<'_, OpenFileState>) -> Option<String> 
 #[tauri::command]
 fn register_open_file(
     registry: tauri::State<'_, OpenFilesRegistry>,
+    window: tauri::Window,
     file_path: String,
     window_label: String,
-) {
-    let mut files = registry.0.lock().unwrap();
-    files.insert(file_path, window_label);
+    frontend_instance: String,
+) -> Result<OpenFileClaim, String> {
+    if window.label() != window_label { return Err("Cannot register ownership for another window".into()); }
+    claim_open_file(&registry, &file_path, window.label(), &frontend_instance)
 }
 
 // Unregister a file when it's closed
 #[tauri::command]
 fn unregister_open_file(
     registry: tauri::State<'_, OpenFilesRegistry>,
+    window: tauri::Window,
     file_path: String,
-) {
-    let mut files = registry.0.lock().unwrap();
-    files.remove(&file_path);
+    frontend_instance: String,
+) -> Result<bool, String> {
+    release_open_file(&registry, &file_path, window.label(), &frontend_instance)
 }
 
 // Unregister all files for a specific window (when window closes)
 #[tauri::command]
 fn unregister_window_files(
     registry: tauri::State<'_, OpenFilesRegistry>,
+    window: tauri::Window,
     window_label: String,
-) {
-    let mut files = registry.0.lock().unwrap();
-    files.retain(|_, label| label != &window_label);
+    frontend_instance: String,
+) -> Result<(), String> {
+    if window.label() != window_label { return Err("Cannot release another window's files".into()); }
+    let mut state = registry.0.lock().map_err(|_| "Open-file registry is unavailable")?;
+    validate_frontend_instance(&state, window.label(), &frontend_instance)?;
+    state.files.retain(|_, label| label != &window_label);
+    Ok(())
 }
 
 // Check if a file is already open and return the window label if so
@@ -76,9 +453,10 @@ fn unregister_window_files(
 fn check_file_open(
     registry: tauri::State<'_, OpenFilesRegistry>,
     file_path: String,
-) -> Option<String> {
-    let files = registry.0.lock().unwrap();
-    files.get(&file_path).cloned()
+) -> Result<Option<String>, String> {
+    let canonical = normalize_open_file(&file_path)?;
+    let files = registry.0.lock().map_err(|_| "Open-file registry is unavailable")?;
+    Ok(files.files.get(&canonical).cloned())
 }
 
 // Focus the window that has a specific file open
@@ -88,9 +466,10 @@ async fn focus_window_with_file(
     registry: tauri::State<'_, OpenFilesRegistry>,
     file_path: String,
 ) -> Result<bool, String> {
+    let file_path = normalize_open_file(&file_path)?;
     let window_label = {
-        let files = registry.0.lock().unwrap();
-        files.get(&file_path).cloned()
+        let files = registry.0.lock().map_err(|_| "Open-file registry is unavailable")?;
+        files.files.get(&file_path).cloned()
     };
 
     if let Some(label) = window_label {
@@ -193,7 +572,7 @@ async fn transfer_tab_to_window(
     if let Some(target) = app.get_webview_window(&target_window) {
         {
             let mut files = registry.0.lock().unwrap();
-            commit_tab_transfer(&mut files, &file_path, &source_window, &target_window, || {
+            commit_tab_transfer(&mut files.files, &file_path, &source_window, &target_window, || {
                 target.emit("tab-transfer", payload).map_err(|e| e.to_string())
             })?;
         }
@@ -1127,7 +1506,20 @@ pub fn run() {
             }
         }))
         .manage(OpenFileState(Mutex::new(None)))
-        .manage(OpenFilesRegistry(Mutex::new(HashMap::new())))
+        .manage(OpenFilesRegistry(Mutex::new(OpenFileRegistryState::default())))
+        .on_page_load(|webview, payload| {
+            if webview.label() == PRINT_WINDOW_LABEL
+                || !matches!(payload.event(), tauri::webview::PageLoadEvent::Finished) {
+                return;
+            }
+            let registry = webview.state::<OpenFilesRegistry>();
+            if let Ok(instance) = frontend_loaded(&registry, webview.window().label()) {
+                let instance = serde_json::to_string(&instance).expect("UUID serialization");
+                let _ = webview.eval(format!(
+                    "window.__mermarkFileOpeningInstance = {instance}; window.dispatchEvent(new Event('mermark-file-opening-ready'));"
+                ));
+            }
+        })
         .manage(PrintHtmlState(Mutex::new(None)))
         .manage(ai::process::ChildRegistry::new())
         .invoke_handler(tauri::generate_handler![

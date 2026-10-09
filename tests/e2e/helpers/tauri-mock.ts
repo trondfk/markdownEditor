@@ -24,6 +24,7 @@ export async function setupTauriMocks(
     openFilePath?: string | null;
     /** App version string */
     version?: string;
+    beforeRead?: (path: string) => void;
     beforeRename?: (from: string, to: string) => Promise<void>;
   } = {},
 ): Promise<{
@@ -40,10 +41,46 @@ export async function setupTauriMocks(
 }> {
   const fs: MockFs = { ...(opts.initialFs ?? {}) };
   const calls: Array<{ cmd: string; args: unknown }> = [];
+  const openFiles = new Map<string, string>();
+  const frontendInstances = new Map<string, string>();
+  let nextInstance = 0;
+
+  await page.exposeFunction('__mockFrontendLoaded', (label: string) => {
+    for (const [path, owner] of openFiles) if (owner === label) openFiles.delete(path);
+    const instance = `${label}-${++nextInstance}`;
+    frontendInstances.set(label, instance);
+    return instance;
+  });
+
+  await page.exposeFunction('__mockFileRegistry', (cmd: string, path: string, label: string, instance?: string) => {
+    calls.push({ cmd, args: { path, label } });
+    if (['register_open_file', 'unregister_open_file', 'unregister_window_files'].includes(cmd)
+        && (!instance || frontendInstances.get(label) !== instance)) {
+      throw new Error('The file-opening frontend instance is no longer current');
+    }
+    if (cmd === 'register_open_file') {
+      if (!(path in fs)) throw new Error(`ENOENT: ${path}`);
+      const owner = openFiles.get(path);
+      if (owner) return { file_path: path, window_label: owner, acquired: false };
+      openFiles.set(path, label);
+      return { file_path: path, window_label: label, acquired: true };
+    }
+    if (cmd === 'unregister_open_file') {
+      if (openFiles.get(path) === label) openFiles.delete(path);
+      return undefined;
+    }
+    if (cmd === 'unregister_window_files') {
+      for (const [path, owner] of openFiles) if (owner === label) openFiles.delete(path);
+      return undefined;
+    }
+    if (cmd === 'focus_window_with_file') return openFiles.has(path);
+    return openFiles.get(path) ?? null;
+  });
 
   // Expose Node-side functions so the browser script can call them
   await page.exposeFunction('__mockFsRead', (path: string): string => {
     calls.push({ cmd: 'read', args: path });
+    opts.beforeRead?.(path);
     if (!(path in fs)) throw new Error(`ENOENT: ${path}`);
     return fs[path];
   });
@@ -97,6 +134,14 @@ export async function setupTauriMocks(
       // Helper to resolve a promise from a window-exposed async Node function
       const call = (fn: string, ...args: unknown[]): Promise<unknown> =>
         (window as Record<string, unknown>)[fn]?.(...args) as Promise<unknown>;
+
+      if (window === window.top) {
+        window.addEventListener('load', async () => {
+          const instance = await call('__mockFrontendLoaded', 'main');
+          (window as unknown as Record<string, unknown>).__mermarkFileOpeningInstance = instance;
+          window.dispatchEvent(new Event('mermark-file-opening-ready'));
+        }, { once: true });
+      }
 
       // Mutable dialog save path — tests override this via page.evaluate
       // Using a plain window variable (NOT page.exposeFunction) so it can be reassigned
@@ -215,8 +260,10 @@ export async function setupTauriMocks(
 
           // ── custom Rust commands ───────────────────────────────────
           if (cmd === 'get_open_file_path') return openFilePath;
-          if (cmd === 'register_open_file' || cmd === 'unregister_open_file' || cmd === 'check_file_open' || cmd === 'get_window_for_file' || cmd === 'focus_window_with_file' || cmd === 'get_current_window_label' || cmd === 'unregister_window_files') {
-            return null;
+          if (cmd === 'get_current_window_label') return 'main';
+          if (cmd === 'register_open_file' || cmd === 'unregister_open_file' || cmd === 'check_file_open' || cmd === 'get_window_for_file' || cmd === 'focus_window_with_file' || cmd === 'unregister_window_files') {
+            const input = args as Record<string, unknown>;
+            return call('__mockFileRegistry', cmd, input.filePath ?? '', input.windowLabel ?? 'main', input.frontendInstance);
           }
 
           // Fallback
