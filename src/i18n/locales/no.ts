@@ -273,6 +273,7 @@ const no: Translations = {
   // File watching & conflict
   fileReloadedExternally: (fileName: string) => `«${fileName}» ble endret utenfra og er lastet inn på nytt.`,
   saveFailed: (fileName: string) => `Kunne ikke lagre «${fileName}» — innholdet var utilgjengelig, så filen ble ikke rørt.`,
+  saveTargetAlreadyOpen: (fileName: string) => `Kan ikke lagre som «${fileName}» fordi filen tilhører et annet åpent dokument. Ingen filer ble endret.`,
   fileReloaded: 'Filen er lastet inn på nytt fra disk.',
   fileReloadError: 'Kunne ikke laste filen på nytt fra disk.',
   fileChangedExternally: 'Filen er endret utenfra',

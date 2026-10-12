@@ -41,18 +41,28 @@ export async function setupTauriMocks(
 }> {
   const fs: MockFs = { ...(opts.initialFs ?? {}) };
   const calls: Array<{ cmd: string; args: unknown }> = [];
-  const openFiles = new Map<string, string>();
+  type Owner = { window: string; instance: string; document: string; opened: boolean; sequence: number; leases: Set<string>; placeholder?: number };
+  const openFiles = new Map<string, Owner>();
+  const reservations = new Map<string, { window: string; instance: string; document: string; source: string | null; target: string; sequence: number; result?: boolean }>();
+  const identities = new Map(Object.keys(fs).map((path, i) => [path, i + 1]));
+  let nextIdentity = identities.size;
+  const retire = (label: string) => {
+    for (const [path, owner] of openFiles) {
+      if (owner.window === label) owner.opened = false;
+      if (!owner.opened && !owner.leases.size) openFiles.delete(path);
+    }
+  };
   const frontendInstances = new Map<string, string>();
   let nextInstance = 0;
 
   await page.exposeFunction('__mockFrontendLoaded', (label: string) => {
-    for (const [path, owner] of openFiles) if (owner === label) openFiles.delete(path);
+    retire(label);
     const instance = `${label}-${++nextInstance}`;
     frontendInstances.set(label, instance);
     return instance;
   });
 
-  await page.exposeFunction('__mockFileRegistry', (cmd: string, path: string, label: string, instance?: string) => {
+  await page.exposeFunction('__mockFileRegistry', (cmd: string, path: string, label: string, instance?: string, documentId?: string) => {
     calls.push({ cmd, args: { path, label } });
     if (['register_open_file', 'unregister_open_file', 'unregister_window_files'].includes(cmd)
         && (!instance || frontendInstances.get(label) !== instance)) {
@@ -61,20 +71,78 @@ export async function setupTauriMocks(
     if (cmd === 'register_open_file') {
       if (!(path in fs)) throw new Error(`ENOENT: ${path}`);
       const owner = openFiles.get(path);
-      if (owner) return { file_path: path, window_label: owner, acquired: false };
-      openFiles.set(path, label);
-      return { file_path: path, window_label: label, acquired: true };
+      if (owner) return { file_path: path, window_label: owner.window, document_id: owner.document, acquired: false };
+      const document = crypto.randomUUID();
+      openFiles.set(path, { window: label, instance: instance!, document, opened: true, sequence: 0, leases: new Set() });
+      return { file_path: path, window_label: label, document_id: document, acquired: true };
     }
     if (cmd === 'unregister_open_file') {
-      if (openFiles.get(path) === label) openFiles.delete(path);
+      const owner = openFiles.get(path);
+      if (owner?.window === label && owner.document === documentId) {
+        owner.opened = false;
+        if (!owner.leases.size) openFiles.delete(path);
+      }
       return undefined;
     }
     if (cmd === 'unregister_window_files') {
-      for (const [path, owner] of openFiles) if (owner === label) openFiles.delete(path);
+      retire(label);
       return undefined;
     }
     if (cmd === 'focus_window_with_file') return openFiles.has(path);
-    return openFiles.get(path) ?? null;
+    return openFiles.get(path)?.window ?? null;
+  });
+
+  await page.exposeFunction('__mockSaveTarget', (cmd: string, input: { filePath?: string; frontendInstance: string; documentId?: string; sourcePath?: string | null; sequence?: number; reservationId?: string; committed?: boolean; publish?: boolean }) => {
+    calls.push({ cmd, args: input });
+    const label = 'main';
+    if (cmd === 'reserve_save_target') {
+      if (frontendInstances.get(label) !== input.frontendInstance) throw new Error('Retired frontend');
+      const document = input.documentId!;
+      const source = input.sourcePath ?? null;
+      if (source) {
+        const owner = openFiles.get(source);
+        if (!owner?.opened || owner.window !== label || owner.instance !== input.frontendInstance || owner.document !== document) throw new Error('Source ownership changed');
+      }
+      const path = input.filePath!;
+      let owner = openFiles.get(path);
+      if (owner && (owner.window !== label || owner.document !== document || owner.instance !== input.frontendInstance)) {
+        return { status: 'occupied', file_path: path, window_label: owner.window };
+      }
+      const created = !(path in fs);
+      if (created) { fs[path] = ''; identities.set(path, ++nextIdentity); }
+      if (!owner) {
+        owner = { window: label, instance: input.frontendInstance, document, opened: false, sequence: 0, leases: new Set(), placeholder: created ? identities.get(path) : undefined };
+        openFiles.set(path, owner);
+      }
+      const token = crypto.randomUUID();
+      owner.leases.add(token);
+      if (source) openFiles.get(source)!.leases.add(token);
+      reservations.set(token, { window: label, instance: input.frontendInstance, document, source, target: path, sequence: input.sequence! });
+      return { status: 'reserved', file_path: path, reservation_id: token, created };
+    }
+    const token = input.reservationId!;
+    const reservation = reservations.get(token);
+    if (!reservation || reservation.window !== label || reservation.instance !== input.frontendInstance) throw new Error('Wrong reservation owner');
+    if (reservation.result !== undefined) return reservation.result;
+    const owners = [...openFiles.entries()].filter(([, owner]) => owner.document === reservation.document);
+    const binding = owners.find(([, owner]) => owner.opened)?.[0] ?? null;
+    const latest = Math.max(0, ...owners.map(([, owner]) => owner.sequence));
+    const publish = !!input.committed && (input.publish ?? input.committed) && frontendInstances.get(label) === input.frontendInstance && binding === reservation.source && reservation.sequence > latest;
+    if (publish) for (const [path, owner] of owners) {
+      owner.opened = path === reservation.target; owner.sequence = reservation.sequence;
+      if (owner.opened) owner.placeholder = undefined;
+    }
+    const target = openFiles.get(reservation.target)!;
+    if (!input.committed && target.leases.size === 1 && target.placeholder !== undefined
+        && identities.get(reservation.target) === target.placeholder && fs[reservation.target] === '') {
+      delete fs[reservation.target]; identities.delete(reservation.target);
+    }
+    for (const [path, owner] of openFiles) {
+      owner.leases.delete(token);
+      if (!owner.opened && !owner.leases.size) openFiles.delete(path);
+    }
+    reservation.result = publish;
+    return publish;
   });
 
   // Expose Node-side functions so the browser script can call them
@@ -89,6 +157,7 @@ export async function setupTauriMocks(
     calls.push({ cmd: 'write', args: { path, content, options } });
     if (options?.createNew && path in fs) throw new Error(`EEXIST: ${path}`);
     if (!options?.createNew && options?.create === false && !(path in fs)) throw new Error(`ENOENT: ${path}`);
+    if (!(path in fs)) identities.set(path, ++nextIdentity);
     fs[path] = content;
   });
 
@@ -97,6 +166,8 @@ export async function setupTauriMocks(
     await opts.beforeRename?.(from, to);
     if (!(from in fs)) throw new Error(`ENOENT rename: ${from}`);
     fs[to] = fs[from];
+    identities.set(to, identities.get(from)!);
+    identities.delete(from);
     delete fs[from];
   });
 
@@ -104,6 +175,7 @@ export async function setupTauriMocks(
     calls.push({ cmd: 'remove', args: path });
     if (!(path in fs)) throw new Error(`ENOENT remove: ${path}`);
     delete fs[path];
+    identities.delete(path);
   });
 
   await page.exposeFunction('__mockFsExists', (path: string): boolean => {
@@ -261,9 +333,10 @@ export async function setupTauriMocks(
           // ── custom Rust commands ───────────────────────────────────
           if (cmd === 'get_open_file_path') return openFilePath;
           if (cmd === 'get_current_window_label') return 'main';
+          if (cmd === 'reserve_save_target' || cmd === 'finish_save_target') return call('__mockSaveTarget', cmd, args);
           if (cmd === 'register_open_file' || cmd === 'unregister_open_file' || cmd === 'check_file_open' || cmd === 'get_window_for_file' || cmd === 'focus_window_with_file' || cmd === 'unregister_window_files') {
             const input = args as Record<string, unknown>;
-            return call('__mockFileRegistry', cmd, input.filePath ?? '', input.windowLabel ?? 'main', input.frontendInstance);
+            return call('__mockFileRegistry', cmd, input.filePath ?? '', input.windowLabel ?? 'main', input.frontendInstance, input.documentId);
           }
 
           // Fallback

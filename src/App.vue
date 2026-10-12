@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, provide, computed, watchEffect, watch, onMounted, onUnmounted, nextTick } from 'vue';
+import { ref, provide, computed, toRaw, watchEffect, watch, onMounted, onUnmounted, nextTick } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import { getVersion } from '@tauri-apps/api/app';
 import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -57,8 +57,8 @@ import { useFileOperations } from './composables/useFileOperations';
 import { useFileOpening } from './composables/useFileOpening';
 import { useCloseConfirmation } from './composables/useCloseConfirmation';
 import { wouldTruncateDocument } from './utils/save-guard';
-import { atomicWriteTextFile } from './utils/atomic-write';
-import { captureSaveState, completeSave, setDocumentMarkdown } from './utils/save-state';
+import { writeReservedSave } from './utils/save-target';
+import { captureSaveSnapshot, syncSaveSnapshot, getDocumentId, setDocumentId, setDocumentMarkdown, type SaveState } from './utils/save-state';
 import { auditShrink } from './utils/save-audit';
 import { ratioFromPointer } from './utils/resize';
 import { useWindowManager } from './composables/useWindowManager';
@@ -116,6 +116,7 @@ const { addRecentFile } = useRecentFiles();
 const {
   closeCurrentWindow,
   registerOpenFile,
+  reserveSaveTarget: reserveNativeSaveTarget,
   unregisterOpenFile,
   unregisterWindowFiles,
   checkFileOpen,
@@ -376,7 +377,7 @@ const closeTabAndCheckWindow = async (paneId: string, tabId: string) => {
   if (filePath) {
     unwatchFile(filePath);
     try {
-      await unregisterOpenFile(filePath);
+      await unregisterOpenFile(filePath, tab ? getDocumentId(tab) : undefined);
     } catch (error) {
       console.error('[App] Error unregistering file:', error);
     }
@@ -505,6 +506,18 @@ const handleTabCloseCancel = () => {
   tabToClose.value = null;
 };
 
+const reserveSaveTarget = async (state: SaveState, filePath: string) => {
+  const isOpen = () => splitState.value.panes.some(pane => pane.tabs.some(tab => toRaw(tab) === toRaw(state.tab)));
+  if (!isOpen()) return null;
+  const lease = await reserveNativeSaveTarget(state, filePath);
+  if (!lease) {
+    showToastNotification(t.value.saveTargetAlreadyOpen(filePath.split(/[/\\]/).pop() ?? filePath), 'warning');
+    try { await focusWindowWithFile(filePath); } catch { /* Refusal stands even if focusing fails. */ }
+    return null;
+  }
+  return { ...lease, canWrite: isOpen };
+};
+
 // ============ File Operations ============
 const {
   isLoadingFile,
@@ -517,6 +530,8 @@ const {
   confirmExternalLink,
   cancelExternalLink,
 } = useFileOperations({
+  openOwnedFile: path => openFileWithAtomicOwnership(path),
+  reserveSaveTarget,
   tabs,
   activeTabId,
   activeTab,
@@ -1580,6 +1595,7 @@ const {
   handleDiscard,
   handleCancel,
 } = useCloseConfirmation({
+  reserveSaveTarget,
   // Every pane, not just the focused one: a dirty tab parked in the other half
   // of a split view is still the user's work.
   collectUnsavedTabs: () => getAllUnsavedTabs(),
@@ -1606,7 +1622,7 @@ const saveTabFromPane = async (paneId: string, tabId: string) => {
   // rather than writing the empty-document placeholder over the file.
   const source = getTabMarkdown(paneId, tab);
   if (source === null) return;
-  const state = captureSaveState(tab, source);
+  const state = captureSaveSnapshot(tab, source);
   const filePath = tab.filePath;
 
   try {
@@ -1629,14 +1645,12 @@ const saveTabFromPane = async (paneId: string, tabId: string) => {
     // so record it rather than block it and leave evidence behind.
     auditShrink('auto-save', filePath, markdown, tab.originalMarkdown);
 
+    const lease = await reserveSaveTarget(state, filePath);
+    if (!lease) return;
+    syncSaveSnapshot(state);
     markSaveStart(filePath);
-    await atomicWriteTextFile(filePath, markdown);
-    markSaveEnd(filePath, markdown);
+    await writeReservedSave(state, markdown, lease, { onCommitted: () => markSaveEnd(filePath, markdown) });
 
-    // Update tab state. tab.content is left alone: EditorPane keeps it current,
-    // and overwriting it here is what turned a bad serialization into a blank
-    // on-screen document.
-    completeSave(state, filePath, markdown);
   } catch (error) {
     console.error('Auto-save failed:', error);
   }
@@ -1857,6 +1871,10 @@ const fileOpening = useFileOpening({
       await switchTab(result.pane.id, result.tab.id);
     }
   },
+  bindDocumentIdentity: (path, id) => {
+    const result = findTabByFilePathSplit(path);
+    if (result) setDocumentId(result.tab, id);
+  },
   loadFile: openFileFromPath,
 });
 
@@ -1894,12 +1912,13 @@ const openFileWithCrossWindowCheck = async (filePath: string): Promise<void> => 
 
     // Register the file after successful open
     if (currentWindowLabel) {
-      await registerOpenFile(filePath, currentWindowLabel);
+      const claim = await registerOpenFile(filePath, currentWindowLabel);
+      if (claim.window_label !== currentWindowLabel) throw new Error('Transfer ownership was lost');
+      const result = findTabByFilePathSplit(claim.file_path);
+      if (result) setDocumentId(result.tab, claim.document_id);
     }
   } catch (error) {
     console.error('[App] Error in cross-window file check:', error);
-    // Fall back to normal open
-    await openFileFromPath(filePath);
   }
 };
 
@@ -2313,6 +2332,7 @@ onUnmounted(async () => {
         <SplitContainer
           ref="splitContainerRef"
           :get-tab-markdown="getTabMarkdown"
+          :reserve-save-target="reserveSaveTarget"
           @link-click="handleLinkClick"
           @close-tab-request="handleCloseTabRequest"
           @changes-updated="handleChangesUpdated"

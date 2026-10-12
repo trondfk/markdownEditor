@@ -3,9 +3,9 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { exit } from '@tauri-apps/plugin-process';
 import { save } from '@tauri-apps/plugin-dialog';
 import { wouldTruncateDocument } from '../utils/save-guard';
-import { atomicWriteTextFile } from '../utils/atomic-write';
+import { writeReservedSave, type SaveTargetReserver } from '../utils/save-target';
 import { auditShrink } from '../utils/save-audit';
-import { captureSaveState, completeSave } from '../utils/save-state';
+import { captureSaveSnapshot, syncSaveSnapshot } from '../utils/save-state';
 import type { Tab } from './useTabs';
 
 /** A dirty tab together with the pane that holds it. */
@@ -17,6 +17,7 @@ export interface UnsavedTab {
 export type TabToSave = UnsavedTab;
 
 export interface UseCloseConfirmationOptions {
+  reserveSaveTarget: SaveTargetReserver;
   /**
    * Every tab in the window with unsaved changes, across all panes.
    *
@@ -48,7 +49,7 @@ export interface UseCloseConfirmationReturn {
 }
 
 export function useCloseConfirmation(options: UseCloseConfirmationOptions): UseCloseConfirmationReturn {
-  const { collectUnsavedTabs, getTabMarkdown, switchToTab, syncActiveTabContent, onSaveFailed } =
+  const { collectUnsavedTabs, getTabMarkdown, switchToTab, syncActiveTabContent, onSaveFailed, reserveSaveTarget } =
     options;
 
   const showSaveConfirmDialog = ref(false);
@@ -96,7 +97,7 @@ export function useCloseConfirmation(options: UseCloseConfirmationOptions): UseC
         onSaveFailed?.(tab);
         return false;
       }
-      const state = captureSaveState(tab, source);
+      const state = captureSaveSnapshot(tab, source);
 
       const markdown = source.trimEnd();
       if (wouldTruncateDocument(markdown, tab.originalMarkdown)) {
@@ -116,9 +117,10 @@ export function useCloseConfirmation(options: UseCloseConfirmationOptions): UseC
 
       if (filePath) {
         auditShrink('close-save', filePath, markdown, tab.originalMarkdown);
-        await atomicWriteTextFile(filePath, markdown);
-
-        return completeSave(state, filePath, markdown);
+        const lease = await reserveSaveTarget(state, filePath);
+        if (!lease) return false;
+        syncSaveSnapshot(state);
+        return await writeReservedSave(state, markdown, lease);
       }
 
       // User cancelled save dialog

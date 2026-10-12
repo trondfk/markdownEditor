@@ -107,7 +107,7 @@ describe('saving before tab transfer', () => {
       mocks.files.set(to, mocks.files.get(from)!);
       mocks.files.delete(from);
     });
-    const wrapper = mount(SplitContainer, { props: { getTabMarkdown: () => '# Snapshot' } });
+    const wrapper = mount(SplitContainer, { props: { reserveSaveTarget: async (_state: unknown, filePath: string) => ({ filePath, created: false, finish: async () => true }), getTabMarkdown: () => '# Snapshot' } });
     try {
       const transferring = mocks.dropOutside!(tab.id, 'left', tab.filePath);
       await started.promise;
@@ -142,7 +142,7 @@ describe('saving before tab transfer', () => {
       started.resolve();
       await release.promise;
     });
-    const wrapper = mount(SplitContainer, { props: { getTabMarkdown: () => '# Snapshot' } });
+    const wrapper = mount(SplitContainer, { props: { reserveSaveTarget: async (_state: unknown, filePath: string) => ({ filePath, created: false, finish: async () => true }), getTabMarkdown: () => '# Snapshot' } });
     try {
       const transferring = mocks.dropOutside!(tab.id, 'left', tab.filePath);
       await started.promise;
@@ -170,7 +170,7 @@ describe('saving before tab transfer', () => {
     const started = deferred();
     const release = deferred();
     mocks.commitReady.mockImplementationOnce(async () => { started.resolve(); await release.promise; });
-    const wrapper = mount(SplitContainer, { props: { getTabMarkdown: () => 'Snapshot' } });
+    const wrapper = mount(SplitContainer, { props: { reserveSaveTarget: async (_state: unknown, filePath: string) => ({ filePath, created: false, finish: async () => true }), getTabMarkdown: () => 'Snapshot' } });
     try {
       const transferring = mocks.dropOutside!(tab.id, 'left', tab.filePath!);
       await started.promise;
@@ -190,7 +190,7 @@ describe('saving before tab transfer', () => {
     const tab = split.splitState.value.panes[0].tabs[0];
     Object.assign(tab, { filePath: '/notes/doc.md', content: '<p>Snapshot</p>', hasChanges: true });
     mocks.transferTabToWindow.mockRejectedValueOnce(new Error('destination missing before commit'));
-    const wrapper = mount(SplitContainer, { props: { getTabMarkdown: () => 'Snapshot' } });
+    const wrapper = mount(SplitContainer, { props: { reserveSaveTarget: async (_state: unknown, filePath: string) => ({ filePath, created: false, finish: async () => true }), getTabMarkdown: () => 'Snapshot' } });
     try {
       await mocks.dropOutside!(tab.id, 'left', tab.filePath!);
       expect(split.splitState.value.panes[0].tabs).toContain(tab);

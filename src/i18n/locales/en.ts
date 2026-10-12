@@ -273,6 +273,7 @@ const en: Translations = {
   // File watching & conflict
   fileReloadedExternally: (fileName: string) => `"${fileName}" was updated externally and reloaded.`,
   saveFailed: (fileName: string) => `Could not save "${fileName}" — its content was unavailable, so the file was left untouched.`,
+  saveTargetAlreadyOpen: (fileName: string) => `Cannot save as "${fileName}" because another open document owns that file. No files were changed.`,
   fileReloaded: 'File reloaded from disk.',
   fileReloadError: 'Could not reload file from disk.',
   fileChangedExternally: 'File Changed Externally',

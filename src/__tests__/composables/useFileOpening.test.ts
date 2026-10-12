@@ -25,9 +25,9 @@ function fixture(label = 'main') {
     registerOpenFile: vi.fn(async (_path: string, window: string): Promise<OpenFileClaim> => {
       const path = '/canonical/document.md';
       const owner = registry.get(path);
-      if (owner) return { file_path: path, window_label: owner, acquired: false };
+      if (owner) return { file_path: path, window_label: owner, acquired: false, document_id: "opening-document" };
       registry.set(path, window);
-      return { file_path: path, window_label: window, acquired: true };
+      return { file_path: path, window_label: window, acquired: true, document_id: "opening-document" };
     }),
     unregisterOpenFile: vi.fn(async (path: string) => {
       if (registry.get(path) === label) registry.delete(path);
@@ -35,6 +35,7 @@ function fixture(label = 'main') {
     focusWindowWithFile: vi.fn(async () => true),
     findLocalFile: vi.fn((path: string) => local.has(path)),
     activateLocalFile: vi.fn(async () => {}),
+    bindDocumentIdentity: vi.fn(),
     loadFile: vi.fn(async (path: string) => { local.add(path); return true; }),
   };
   return { options, registry, local, opener: useFileOpening(options) };
@@ -49,6 +50,7 @@ describe('atomic file opening', () => {
     });
     await opener.openFile('/alias/document.md');
     expect(options.loadFile).toHaveBeenCalledExactlyOnceWith('/canonical/document.md');
+    expect(options.bindDocumentIdentity).toHaveBeenCalledExactlyOnceWith('/canonical/document.md', 'opening-document');
     expect(options.unregisterOpenFile).not.toHaveBeenCalled();
   });
 
@@ -82,7 +84,7 @@ describe('atomic file opening', () => {
     const { opener, options, registry } = fixture();
     options.loadFile.mockResolvedValueOnce(false);
     await expect(opener.openFile('/alias/document.md')).rejects.toThrow('File loading failed');
-    expect(options.unregisterOpenFile).toHaveBeenCalledExactlyOnceWith('/canonical/document.md');
+    expect(options.unregisterOpenFile).toHaveBeenCalledExactlyOnceWith('/canonical/document.md', 'opening-document');
     expect(registry.size).toBe(0);
   });
 
@@ -101,6 +103,7 @@ describe('atomic file opening', () => {
     }]);
     const createNewTab = vi.fn();
     const operations = useFileOperations({
+    reserveSaveTarget: vi.fn(),
       tabs, activeTabId: ref('empty'), activeTab: computed(() => tabs.value[0]),
       findTabByFilePath: () => undefined, createNewTab,
       switchToTab: vi.fn(), getEditorHtml: () => '<p></p>', setEditorContent: vi.fn(),
@@ -123,6 +126,7 @@ describe('atomic file opening', () => {
     await expect(opener.openFile('/document.md')).rejects.toThrow('UI failed');
     expect(options.unregisterOpenFile).not.toHaveBeenCalled();
     expect(registry.get('/canonical/document.md')).toBe('main');
+    expect(options.bindDocumentIdentity).toHaveBeenCalledExactlyOnceWith('/canonical/document.md', 'opening-document');
   });
 
   it('does not open a copy if focusing the existing owner fails', async () => {

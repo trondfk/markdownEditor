@@ -1,6 +1,8 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { getDocumentId, type SaveState } from '../utils/save-state';
+import type { SaveTargetLease } from '../utils/save-target';
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
 
 export interface TabTransferPayload {
@@ -13,6 +15,7 @@ export interface OpenFileClaim {
   file_path: string;
   window_label: string;
   acquired: boolean;
+  document_id: string;
 }
 
 export function useWindowManager() {
@@ -98,6 +101,7 @@ export function useWindowManager() {
       filePath,
       sourceWindow,
       targetWindow,
+      frontendInstance: await getFrontendInstance(),
     });
   };
 
@@ -121,8 +125,28 @@ export function useWindowManager() {
     });
   };
 
-  const unregisterOpenFile = async (filePath: string): Promise<void> => {
-    return invoke('unregister_open_file', { filePath, frontendInstance: await getFrontendInstance() });
+  const unregisterOpenFile = async (filePath: string, documentId?: string): Promise<void> => {
+    return invoke('unregister_open_file', { filePath, frontendInstance: await getFrontendInstance(), ...(documentId ? { documentId } : {}) });
+  };
+
+  const reserveSaveTarget = async (state: SaveState, requestedPath: string): Promise<SaveTargetLease | null> => {
+    const frontendInstance = await getFrontendInstance();
+    const result = await invoke<
+      { status: 'reserved'; file_path: string; reservation_id: string; created: boolean }
+      | { status: 'occupied'; file_path: string; window_label: string }
+    >('reserve_save_target', {
+      filePath: requestedPath, frontendInstance, documentId: getDocumentId(state.tab),
+      sourcePath: state.filePath, sequence: state.sequence,
+    });
+    if (result.status === 'occupied') return null;
+    return {
+      filePath: result.file_path, created: result.created,
+      finish: async (committed, publish = committed) => {
+        const args = { reservationId: result.reservation_id, frontendInstance, committed, publish };
+        try { return await invoke<boolean>('finish_save_target', args); }
+        catch { return invoke<boolean>('finish_save_target', args); }
+      },
+    };
   };
 
   const unregisterWindowFiles = async (windowLabel: string): Promise<void> => {
@@ -157,6 +181,7 @@ export function useWindowManager() {
     closeCurrentWindow,
     // File registry
     registerOpenFile,
+    reserveSaveTarget,
     unregisterOpenFile,
     unregisterWindowFiles,
     checkFileOpen,

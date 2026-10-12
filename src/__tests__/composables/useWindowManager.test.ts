@@ -22,6 +22,8 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
+import { captureSaveState, getDocumentId } from '../../utils/save-state';
+import type { Tab } from '../../composables/useTabs';
 import { useWindowManager } from '../../composables/useWindowManager';
 
 describe('useWindowManager', () => {
@@ -264,6 +266,7 @@ describe('useWindowManager', () => {
         filePath: '/path/to/file.md',
         sourceWindow: 'main',
         targetWindow: 'window-1',
+        frontendInstance: 'frontend-1',
       });
     });
   });
@@ -319,4 +322,35 @@ describe('useWindowManager', () => {
       expect(mockClose).toHaveBeenCalled();
     });
   });
+  it('reserves a target with the stable document and operation identity and publishes before releasing', async () => {
+    const tab: Tab = { id: 'same-tab-id', filePath: '/old.md', fileName: 'old.md', content: '<p>A</p>', markdown: 'A', originalMarkdown: 'A', hasChanges: false, scrollTop: 0 };
+    const state = captureSaveState(tab);
+    vi.mocked(invoke).mockResolvedValueOnce({ status: 'reserved', file_path: '/new.md', reservation_id: 'lease-1', created: true });
+    const lease = await windowManager.reserveSaveTarget(state, '/new.md');
+    expect(invoke).toHaveBeenCalledExactlyOnceWith('reserve_save_target', {
+      filePath: '/new.md', frontendInstance: 'frontend-1', documentId: getDocumentId(tab), sourcePath: '/old.md', sequence: state.sequence,
+    });
+    vi.mocked(invoke).mockResolvedValueOnce(true);
+    expect(await lease!.finish(true, true)).toBe(true);
+    expect(invoke).toHaveBeenLastCalledWith('finish_save_target', { reservationId: 'lease-1', frontendInstance: 'frontend-1', committed: true, publish: true });
+  });
+
+  it('does not manufacture a lease for an occupied target', async () => {
+    const tab: Tab = { id: 'a', filePath: null, fileName: 'new', content: '<p></p>', originalMarkdown: null, hasChanges: false, scrollTop: 0 };
+    vi.mocked(invoke).mockResolvedValueOnce({ status: 'occupied', file_path: '/owned.md', window_label: 'main' });
+    expect(await windowManager.reserveSaveTarget(captureSaveState(tab), '/owned.md')).toBeNull();
+    expect(invoke).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries an unknown finalization reply with exactly the same reservation identity', async () => {
+    const tab: Tab = { id: 'new', filePath: null, fileName: 'new', content: '<p>A</p>', originalMarkdown: null, hasChanges: true, scrollTop: 0 };
+    vi.mocked(invoke).mockResolvedValueOnce({ status: 'reserved', file_path: '/new.md', reservation_id: 'lease-retry', created: true });
+    const lease = await windowManager.reserveSaveTarget(captureSaveState(tab), '/new.md');
+    vi.mocked(invoke).mockRejectedValueOnce(new Error('Reply unavailable')).mockResolvedValueOnce(true);
+    expect(await lease!.finish(true, true)).toBe(true);
+    const calls = vi.mocked(invoke).mock.calls.slice(-2);
+    expect(calls[0]).toEqual(calls[1]);
+    expect(calls[0]).toEqual(['finish_save_target', { reservationId: 'lease-retry', frontendInstance: 'frontend-1', committed: true, publish: true }]);
+  });
+
 });

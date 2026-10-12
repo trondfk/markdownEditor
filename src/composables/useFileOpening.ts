@@ -3,10 +3,11 @@ import type { OpenFileClaim } from './useWindowManager';
 interface FileOpeningOptions {
   getWindowLabel: () => string | Promise<string>;
   registerOpenFile: (filePath: string, windowLabel: string) => Promise<OpenFileClaim>;
-  unregisterOpenFile: (filePath: string) => Promise<void>;
+  unregisterOpenFile: (filePath: string, documentId?: string) => Promise<void>;
   focusWindowWithFile: (filePath: string) => Promise<boolean>;
   findLocalFile: (filePath: string) => boolean;
   activateLocalFile: (filePath: string) => void | Promise<void>;
+  bindDocumentIdentity: (filePath: string, documentId: string) => void;
   loadFile: (filePath: string) => Promise<boolean>;
 }
 
@@ -38,13 +39,16 @@ export function useFileOpening(options: FileOpeningOptions) {
       try {
         if (options.findLocalFile(path)) {
           await options.activateLocalFile(path);
+          options.bindDocumentIdentity(path, claim.document_id);
           return;
         }
         if (!await options.loadFile(path)) throw new Error('File loading failed');
+        options.bindDocumentIdentity(path, claim.document_id);
       } catch (error) {
         // A UI callback can fail after the document was created. Keep ownership
         // while that document exists; release only an unused reservation.
-        if (!options.findLocalFile(path)) await options.unregisterOpenFile(path);
+        if (options.findLocalFile(path)) options.bindDocumentIdentity(path, claim.document_id);
+        else await options.unregisterOpenFile(path, claim.document_id);
         throw error;
       }
     })();

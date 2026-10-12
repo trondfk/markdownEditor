@@ -271,6 +271,7 @@ export interface Translations {
   // File watching & conflict
   fileReloadedExternally: (fileName: string) => string;
   saveFailed: (fileName: string) => string;
+  saveTargetAlreadyOpen: (fileName: string) => string;
   fileReloaded: string;
   fileReloadError: string;
   fileChangedExternally: string;

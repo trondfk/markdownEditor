@@ -9,6 +9,19 @@ interface CommittedSave {
   markdown: string;
 }
 
+const documentIds = new WeakMap<Tab, string>();
+
+export function getDocumentId(tab: Tab): string {
+  const document = toRaw(tab);
+  let id = documentIds.get(document);
+  if (!id) { id = crypto.randomUUID(); documentIds.set(document, id); }
+  return id;
+}
+
+export function setDocumentId(tab: Tab, id: string): void {
+  documentIds.set(toRaw(tab), id);
+}
+
 const saveOperations = new WeakMap<Tab, {
   lastStarted: number;
   lastPublished: number;
@@ -47,6 +60,18 @@ export function captureSaveState(tab: Tab, markdown?: string) {
     markdown: getDocumentMarkdown(tab),
     filePath: tab.filePath,
   };
+}
+
+export function captureSaveSnapshot(tab: Tab, source: string) {
+  const state = captureSaveState(tab);
+  return { ...state, markdown: normalize(source), previousMarkdown: state.markdown, previousContent: tab.content };
+}
+
+export function syncSaveSnapshot(state: ReturnType<typeof captureSaveSnapshot>): void {
+  if ((state.tab.editRevision ?? 0) === state.revision
+      && getDocumentMarkdown(state.tab) === state.previousMarkdown && state.tab.content === state.previousContent) {
+    setDocumentMarkdown(state.tab, state.markdown);
+  }
 }
 
 export type SaveState = ReturnType<typeof captureSaveState>;
@@ -95,4 +120,8 @@ export function completeSave(state: SaveState, filePath: string, markdown: strin
   operations.lastPublished = state.sequence;
   refreshDirtyState(tab);
   return !tab.hasChanges;
+}
+
+export function wasSavePublished(state: SaveState): boolean {
+  return saveOperations.get(toRaw(state.tab))?.lastPublished === state.sequence;
 }

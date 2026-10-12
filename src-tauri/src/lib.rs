@@ -17,8 +17,31 @@ pub struct OpenFilesRegistry(pub Mutex<OpenFileRegistryState>);
 
 #[derive(Debug, Default)]
 pub struct OpenFileRegistryState {
-    files: HashMap<String, String>,
+    files: HashMap<String, FileOwner>,
+    reservations: HashMap<String, TargetReservation>,
     frontend_instances: HashMap<String, String>,
+}
+
+#[derive(Clone, Debug)]
+struct FileOwner {
+    window_label: String,
+    frontend_instance: String,
+    document_id: String,
+    opened: bool,
+    binding_sequence: u64,
+    leases: BTreeSet<String>,
+    pending_file: Option<((u64, u64), std::time::SystemTime)>,
+}
+
+#[derive(Clone, Debug)]
+struct TargetReservation {
+    window_label: String,
+    frontend_instance: String,
+    document_id: String,
+    source: Option<String>,
+    target: String,
+    sequence: u64,
+    result: Option<bool>,
 }
 
 fn frontend_loaded(registry: &OpenFilesRegistry, window_label: &str) -> Result<String, String> {
@@ -26,7 +49,11 @@ fn frontend_loaded(registry: &OpenFilesRegistry, window_label: &str) -> Result<S
     let instance = uuid::Uuid::new_v4().to_string();
     // A completed native page load has replaced the previous frontend. Retire
     // only that window's documents, under the same lock used for claiming them.
-    state.files.retain(|_, owner| owner != window_label);
+    for owner in state.files.values_mut().filter(|owner| owner.window_label == window_label) {
+        owner.opened = false;
+    }
+    state.files.retain(|_, owner| owner.opened || !owner.leases.is_empty());
+    state.reservations.retain(|_, reservation| reservation.window_label != window_label || reservation.result.is_none());
     state.frontend_instances.insert(window_label.to_string(), instance.clone());
     Ok(instance)
 }
@@ -43,6 +70,7 @@ pub struct OpenFileClaim {
     file_path: String,
     window_label: String,
     acquired: bool,
+    document_id: String,
 }
 
 fn normalize_open_file(file_path: &str) -> Result<String, String> {
@@ -66,7 +94,7 @@ fn normalize_open_file(file_path: &str) -> Result<String, String> {
 }
 
 #[cfg(windows)]
-fn validate_windows_open_file(path: &Path) -> Result<(), String> {
+fn validate_windows_open_file(path: &Path) -> Result<(u64, u64), String> {
     use std::os::windows::{ffi::OsStrExt, io::{AsRawHandle, FromRawHandle}};
     use std::path::{Component, Prefix};
     use std::ffi::c_void;
@@ -109,31 +137,210 @@ fn validate_windows_open_file(path: &Path) -> Result<(), String> {
     if information.links != 1 || information.attributes & (0x400 | 0x10) != 0 {
         return Err("Hardlinks, unresolved reparse points and directories are unsupported".into());
     }
-    Ok(())
+    Ok((information.volume as u64, ((information.index_high as u64) << 32) | information.index_low as u64))
 }
 
 fn claim_open_file(registry: &OpenFilesRegistry, file_path: &str, window_label: &str, instance: &str) -> Result<OpenFileClaim, String> {
-    let file_path = normalize_open_file(file_path)?;
     let mut state = registry.0.lock().map_err(|_| "Open-file registry is unavailable")?;
     validate_frontend_instance(&state, window_label, instance)?;
-    let files = &mut state.files;
-    if let Some(owner) = files.get(&file_path) {
-        return Ok(OpenFileClaim { file_path, window_label: owner.clone(), acquired: false });
+    let file_path = normalize_open_file(file_path)?;
+    if let Some(owner) = state.files.get(&file_path) {
+        return Ok(OpenFileClaim { file_path, window_label: owner.window_label.clone(), document_id: owner.document_id.clone(), acquired: false });
     }
-    files.insert(file_path.clone(), window_label.to_string());
-    Ok(OpenFileClaim { file_path, window_label: window_label.to_string(), acquired: true })
+    let document_id = uuid::Uuid::new_v4().to_string();
+    state.files.insert(file_path.clone(), FileOwner {
+        window_label: window_label.into(), frontend_instance: instance.into(), document_id: document_id.clone(),
+        opened: true, binding_sequence: 0, leases: BTreeSet::new(), pending_file: None,
+    });
+    Ok(OpenFileClaim { file_path, window_label: window_label.into(), document_id, acquired: true })
 }
 
-fn release_open_file(registry: &OpenFilesRegistry, file_path: &str, window_label: &str, instance: &str) -> Result<bool, String> {
+fn release_open_file(registry: &OpenFilesRegistry, file_path: &str, window_label: &str, instance: &str, document_id: Option<&str>) -> Result<bool, String> {
     let mut state = registry.0.lock().map_err(|_| "Open-file registry is unavailable")?;
     validate_frontend_instance(&state, window_label, instance)?;
-    let files = &mut state.files;
-    // An opened file may have been deleted. Its registered canonical key still
-    // permits an owner-checked release without accessing the missing file.
-    let key = if files.contains_key(file_path) { file_path.to_string() } else { normalize_open_file(file_path)? };
-    if files.get(&key).map(String::as_str) != Some(window_label) { return Ok(false); }
-    files.remove(&key);
+    let key = if state.files.contains_key(file_path) { file_path.to_string() } else { normalize_open_file(file_path)? };
+    let Some(owner) = state.files.get_mut(&key) else { return Ok(false); };
+    if owner.window_label != window_label || owner.frontend_instance != instance
+        || document_id != Some(owner.document_id.as_str()) { return Ok(false); }
+    owner.opened = false;
+    if owner.leases.is_empty() { state.files.remove(&key); }
     Ok(true)
+}
+
+#[derive(Debug, Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+enum SaveTargetClaim {
+    Reserved { file_path: String, reservation_id: String, created: bool },
+    Occupied { file_path: String, window_label: String },
+}
+
+fn file_identity(path: &Path) -> Result<(u64, u64), String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let metadata = std::fs::symlink_metadata(path).map_err(|e| e.to_string())?;
+        if !metadata.is_file() || metadata.nlink() != 1 { return Err("Ambiguous file identity".into()); }
+        Ok((metadata.dev(), metadata.ino()))
+    }
+    #[cfg(windows)]
+    { validate_windows_open_file(path) }
+    #[cfg(not(any(unix, windows)))]
+    { Err("Unsupported file identity".into()) }
+}
+
+#[cfg(any(windows, test))]
+fn valid_windows_save_name(name: &str) -> bool {
+    if name.is_empty() || name.ends_with(['.', ' ']) || name.encode_utf16().count() > 255
+        || name.chars().any(|c| c <= '\u{1f}' || "<>:\"/\\|?*".contains(c)) { return false; }
+    let stem = name.split('.').next().unwrap().trim_end().to_ascii_uppercase();
+    !matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$")
+        && !(stem.chars().count() == 4 && (stem.starts_with("COM") || stem.starts_with("LPT"))
+            && matches!(stem.chars().last(), Some('1'..='9' | '¹' | '²' | '³')))
+}
+
+fn prepare_save_target(path: &str) -> Result<(String, bool), String> {
+    match std::fs::symlink_metadata(path) {
+        Ok(_) => return normalize_open_file(path).map(|path| (path, false)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {},
+        Err(error) => return Err(error.to_string()),
+    }
+    let requested = Path::new(path);
+    let name = requested.file_name().ok_or("Missing file name")?;
+    let parent = std::fs::canonicalize(requested.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new(".")))
+        .map_err(|e| e.to_string())?;
+    if !parent.is_dir() { return Err("The parent is not a directory".into()); }
+    #[cfg(windows)]
+    {
+        use std::path::{Component, Prefix};
+        let name = name.to_str().ok_or("Non-Unicode file name")?;
+        if !valid_windows_save_name(name) { return Err("Ambiguous Windows file name".into()); }
+        let drive = match parent.components().next() {
+            Some(Component::Prefix(prefix)) => match prefix.kind() {
+                Prefix::Disk(drive) | Prefix::VerbatimDisk(drive) => drive,
+                _ => return Err("Network and device save targets are unsupported".into()),
+            },
+            _ => return Err("Missing local Windows volume".into()),
+        };
+        #[link(name = "kernel32")]
+        extern "system" { fn GetDriveTypeW(root: *const u16) -> u32; }
+        let root = [drive as u16, b':' as u16, b'\\' as u16, 0];
+        // SAFETY: the fixed-size root buffer is a terminated DOS drive path.
+        if unsafe { GetDriveTypeW(root.as_ptr()) } != 3 { return Err("Only fixed local Windows volumes are supported".into()); }
+    }
+    let candidate = parent.join(name);
+    let candidate_text = candidate.to_str().ok_or("Non-Unicode save path")?;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    // Exclusive creation resolves case aliases through the filesystem itself.
+    match options.open(&candidate) {
+        Ok(file) => { drop(file); },
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => return normalize_open_file(candidate_text).map(|path| (path, false)),
+        Err(error) => return Err(error.to_string()),
+    }
+    let result = normalize_open_file(candidate_text);
+    if result.is_err() { let _ = std::fs::remove_file(&candidate); }
+    result.map(|path| (path, true))
+}
+
+fn reserve_target(registry: &OpenFilesRegistry, requested: &str, window: &str, instance: &str,
+    document: &str, source: Option<&str>, sequence: u64) -> Result<SaveTargetClaim, String> {
+    if uuid::Uuid::parse_str(document).is_err() || sequence == 0 { return Err("Invalid document or save identity".into()); }
+    let mut state = registry.0.lock().map_err(|_| "Open-file registry is unavailable")?;
+    validate_frontend_instance(&state, window, instance)?;
+    if state.files.values().any(|owner| owner.document_id == document
+        && (owner.window_label != window || owner.frontend_instance != instance)) {
+        return Err("The document belongs to another frontend".into());
+    }
+    if let Some(source) = source {
+        let owner = state.files.get(source).ok_or("The source document is not registered")?;
+        if !owner.opened || owner.window_label != window || owner.frontend_instance != instance || owner.document_id != document {
+            return Err("The source document no longer owns its file".into());
+        }
+    } else if state.files.values().any(|owner| owner.document_id == document && owner.opened) {
+        return Err("The document binding changed".into());
+    }
+    if std::fs::symlink_metadata(requested).is_err() {
+        let requested_path = Path::new(requested);
+        let parent = std::fs::canonicalize(requested_path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."))).map_err(|e| e.to_string())?;
+        let candidate = parent.join(requested_path.file_name().ok_or("Missing file name")?);
+        if let Some(owner) = candidate.to_str().and_then(|path| state.files.get(path)) {
+            if owner.window_label != window || owner.frontend_instance != instance || owner.document_id != document {
+                return Ok(SaveTargetClaim::Occupied { file_path: candidate.to_str().unwrap().into(), window_label: owner.window_label.clone() });
+            }
+        }
+        #[cfg(windows)]
+        if state.files.keys().any(|path| Path::new(path).parent() == Some(parent.as_path()) && !Path::new(path).exists()) {
+            return Err("A deleted registered file makes the new target identity ambiguous".into());
+        }
+    }
+    let (target, created) = prepare_save_target(requested)?;
+    if let Some(owner) = state.files.get(&target) {
+        if owner.window_label != window || owner.frontend_instance != instance || owner.document_id != document {
+            return Ok(SaveTargetClaim::Occupied { file_path: target, window_label: owner.window_label.clone() });
+        }
+    }
+    let created_identity = if created {
+        Some((file_identity(Path::new(&target))?, std::fs::metadata(&target).and_then(|m| m.modified()).map_err(|e| e.to_string())?))
+    } else { None };
+    let token = uuid::Uuid::new_v4().to_string();
+    let owner = state.files.entry(target.clone()).or_insert_with(|| FileOwner {
+        window_label: window.into(), frontend_instance: instance.into(), document_id: document.into(),
+        opened: false, binding_sequence: 0, leases: BTreeSet::new(), pending_file: None,
+    });
+    if created { owner.pending_file = created_identity; }
+    owner.leases.insert(token.clone());
+    if let Some(source) = source { state.files.get_mut(source).unwrap().leases.insert(token.clone()); }
+    state.reservations.insert(token.clone(), TargetReservation {
+        window_label: window.into(), frontend_instance: instance.into(), document_id: document.into(),
+        source: source.map(String::from), target: target.clone(), sequence, result: None,
+    });
+    Ok(SaveTargetClaim::Reserved { file_path: target, reservation_id: token, created })
+}
+
+fn finish_target(registry: &OpenFilesRegistry, token: &str, window: &str, instance: &str, committed: bool, publish_binding: bool) -> Result<bool, String> {
+    let mut state = registry.0.lock().map_err(|_| "Open-file registry is unavailable")?;
+    let reservation = state.reservations.get(token).ok_or("Unknown save reservation")?.clone();
+    if reservation.window_label != window || reservation.frontend_instance != instance { return Err("Not the reservation owner".into()); }
+    if let Some(result) = reservation.result { return Ok(result); }
+    let current = state.frontend_instances.get(window).map(String::as_str) == Some(instance);
+    let binding = state.files.iter().find(|(_, owner)| owner.document_id == reservation.document_id && owner.opened);
+    let source_matches = match binding {
+        Some((path, _)) => reservation.source.as_ref() == Some(path),
+        None => reservation.source.is_none(),
+    };
+    let latest = state.files.values().filter(|owner| owner.document_id == reservation.document_id)
+        .map(|owner| owner.binding_sequence).max().unwrap_or(0);
+    let publish = committed && publish_binding && current && source_matches && reservation.sequence > latest;
+    if publish {
+        for (path, owner) in state.files.iter_mut().filter(|(_, owner)| owner.document_id == reservation.document_id) {
+            owner.opened = path == &reservation.target;
+            owner.binding_sequence = reservation.sequence;
+            if owner.opened { owner.pending_file = None; }
+        }
+    }
+    if !committed {
+        let owner = state.files.get(&reservation.target).ok_or("Reserved owner disappeared")?;
+        // Other native leases protect replacement while cleanup checks ownership.
+        if owner.leases.len() == 1 && owner.leases.contains(token) {
+            if let Some((identity, modified)) = owner.pending_file {
+                let path = Path::new(&reservation.target);
+                // An atomic replacement has a different identity, including empty content.
+                if file_identity(path).ok() == Some(identity)
+                    && std::fs::metadata(path).is_ok_and(|m| m.len() == 0 && m.modified().ok() == Some(modified)) {
+                    std::fs::remove_file(path).map_err(|e| e.to_string())?;
+                }
+            }
+        }
+    }
+    for owner in state.files.values_mut() { owner.leases.remove(token); }
+    state.files.retain(|_, owner| owner.opened || !owner.leases.is_empty());
+    state.reservations.get_mut(token).unwrap().result = Some(publish);
+    Ok(publish)
 }
 
 #[cfg(test)]
@@ -168,7 +375,10 @@ mod open_file_registry_tests {
     }
 
     fn release(registry: &OpenFilesRegistry, path: &str, label: &str) -> Result<bool, String> {
-        release_open_file(registry, path, label, &instance(registry, label)?)
+        {
+            let document = registry.0.lock().unwrap().files.get(path).map(|owner| owner.document_id.clone());
+            release_open_file(registry, path, label, &instance(registry, label)?, document.as_deref())
+        }
     }
 
     #[test]
@@ -293,7 +503,7 @@ mod open_file_registry_tests {
         assert!(release(&registry, &claimed.file_path, "main").unwrap());
         assert!(claim(&registry, &fixture.path(), "other").unwrap().acquired);
         assert!(!release(&registry, &claimed.file_path, "main").unwrap());
-        assert_eq!(registry.0.lock().unwrap().files.get(&claimed.file_path).unwrap(), "other");
+        assert_eq!(registry.0.lock().unwrap().files.get(&claimed.file_path).unwrap().window_label, "other");
     }
 
     #[test]
@@ -336,7 +546,7 @@ mod open_file_registry_tests {
         let current = frontend_loaded(&registry, "main").unwrap();
         claim_open_file(&registry, &fixture.path(), "main", &current).unwrap();
         assert!(claim_open_file(&registry, &fixture.path(), "main", "unrecognized").is_err());
-        assert!(release_open_file(&registry, &fixture.path(), "main", "unrecognized").is_err());
+        assert!(release_open_file(&registry, &fixture.path(), "main", "unrecognized", None).is_err());
         assert!(!claim_open_file(&registry, &fixture.path(), "main", &current).unwrap().acquired);
         assert_eq!(registry.0.lock().unwrap().files.len(), 1);
     }
@@ -349,10 +559,10 @@ mod open_file_registry_tests {
         claim_open_file(&registry, &fixture.path(), "main", &old).unwrap();
         let current = frontend_loaded(&registry, "main").unwrap();
         let claimed = claim_open_file(&registry, &fixture.path(), "main", &current).unwrap();
-        assert!(release_open_file(&registry, &claimed.file_path, "main", &old).is_err());
+        assert!(release_open_file(&registry, &claimed.file_path, "main", &old, None).is_err());
         assert!(claim_open_file(&registry, &fixture.path(), "main", &old).is_err());
-        assert_eq!(registry.0.lock().unwrap().files.get(&claimed.file_path).unwrap(), "main");
-        assert!(release_open_file(&registry, &claimed.file_path, "main", &current).unwrap());
+        assert_eq!(registry.0.lock().unwrap().files.get(&claimed.file_path).unwrap().window_label, "main");
+        assert!(release_open_file(&registry, &claimed.file_path, "main", &current, Some(&claimed.document_id)).unwrap());
         assert_eq!(std::fs::read_to_string(fixture.path()).unwrap(), "Original");
     }
 
@@ -382,6 +592,234 @@ mod open_file_registry_tests {
         assert_eq!(registry.0.lock().unwrap().files.len(), 1);
         assert_eq!(std::fs::read_to_string(fixture.path()).unwrap(), "Original");
     }
+    fn reserved(result: SaveTargetClaim) -> (String, String) {
+        match result {
+            SaveTargetClaim::Reserved { file_path, reservation_id, .. } => (file_path, reservation_id),
+            other => panic!("Expected reservation: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn save_as_rejects_other_documents_in_the_same_and_other_windows() {
+        for label in ["main", "other"] {
+            let fixture = Fixture::new();
+            let registry = registry();
+            let source = fixture.0.join("source.md");
+            std::fs::write(&source, "Source").unwrap();
+            let a = claim(&registry, source.to_str().unwrap(), "main").unwrap();
+            let b = claim(&registry, &fixture.path(), label).unwrap();
+            let result = reserve_target(&registry, &fixture.path(), "main", &instance(&registry, "main").unwrap(),
+                &a.document_id, Some(&a.file_path), 1).unwrap();
+            assert!(matches!(result, SaveTargetClaim::Occupied { .. }));
+            assert_eq!(std::fs::read_to_string(fixture.path()).unwrap(), "Original");
+            assert_eq!(std::fs::read_to_string(source).unwrap(), "Source");
+            let state = registry.0.lock().unwrap();
+            assert_eq!(state.files[&b.file_path].document_id, b.document_id);
+            assert!(state.reservations.is_empty());
+        }
+    }
+
+    #[test]
+    fn opening_and_save_as_compete_atomically_for_one_target() {
+        let fixture = Fixture::new();
+        let registry = Arc::new(registry());
+        let a = instance(&registry, "saving").unwrap();
+        let b = instance(&registry, "opening").unwrap();
+        let document = uuid::Uuid::new_v4().to_string();
+        let barrier = Arc::new(Barrier::new(2));
+        let save = {
+            let registry = registry.clone(); let barrier = barrier.clone(); let path = fixture.path();
+            std::thread::spawn(move || { barrier.wait(); reserve_target(&registry, &path, "saving", &a, &document, None, 1).unwrap() })
+        };
+        let open = {
+            let registry = registry.clone(); let barrier = barrier.clone(); let path = fixture.path();
+            std::thread::spawn(move || { barrier.wait(); claim_open_file(&registry, &path, "opening", &b).unwrap() })
+        };
+        let saving = matches!(save.join().unwrap(), SaveTargetClaim::Reserved { .. });
+        let opening = open.join().unwrap().acquired;
+        assert_ne!(saving, opening);
+        assert_eq!(registry.0.lock().unwrap().files.len(), 1);
+        assert_eq!(std::fs::read_to_string(fixture.path()).unwrap(), "Original");
+    }
+
+    #[test]
+    fn successful_save_as_publishes_new_owner_and_safely_retires_the_source() {
+        let fixture = Fixture::new(); let registry = registry();
+        let a = claim(&registry, &fixture.path(), "main").unwrap();
+        let instance = instance(&registry, "main").unwrap();
+        let destination = fixture.0.join("new.md");
+        let (path, token) = reserved(reserve_target(&registry, destination.to_str().unwrap(), "main", &instance,
+            &a.document_id, Some(&a.file_path), 1).unwrap());
+        assert!(!claim(&registry, &path, "other").unwrap().acquired);
+        let temp = fixture.0.join("payload.tmp"); std::fs::write(&temp, "Saved").unwrap(); std::fs::rename(&temp, &path).unwrap();
+        assert!(finish_target(&registry, &token, "main", &instance, true, true).unwrap());
+        assert!(finish_target(&registry, &token, "main", &instance, true, true).unwrap());
+        assert!(claim(&registry, &a.file_path, "other").unwrap().acquired);
+        let state = registry.0.lock().unwrap();
+        assert_eq!(state.files[&path].document_id, a.document_id);
+        assert_eq!(state.files[&path].window_label, "main");
+        assert!(state.files[&path].opened);
+        assert_eq!(std::fs::read_to_string(path).unwrap(), "Saved");
+    }
+
+    #[test]
+    fn cancellation_preserves_existing_content_and_only_releases_the_matching_lease() {
+        let fixture = Fixture::new(); let registry = registry(); let instance = instance(&registry, "main").unwrap();
+        let document = uuid::Uuid::new_v4().to_string();
+        let (path, token) = reserved(reserve_target(&registry, &fixture.path(), "main", &instance, &document, None, 1).unwrap());
+        assert!(finish_target(&registry, &token, "other", &instance, false, false).is_err());
+        assert!(!claim(&registry, &path, "other").unwrap().acquired);
+        assert!(!finish_target(&registry, &token, "main", &instance, false, false).unwrap());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "Original");
+        assert!(claim(&registry, &path, "other").unwrap().acquired);
+        assert!(!finish_target(&registry, &token, "main", &instance, false, false).unwrap());
+        assert_eq!(registry.0.lock().unwrap().files[&path].window_label, "other");
+    }
+
+    #[test]
+    fn cancelled_new_file_is_removed_but_other_reservations_protect_their_replacement() {
+        let fixture = Fixture::new(); let registry = registry(); let instance = instance(&registry, "main").unwrap();
+        let document = uuid::Uuid::new_v4().to_string(); let destination = fixture.0.join("new.md");
+        let (path, a) = reserved(reserve_target(&registry, destination.to_str().unwrap(), "main", &instance, &document, None, 1).unwrap());
+        let (_, b) = reserved(reserve_target(&registry, &path, "main", &instance, &document, None, 2).unwrap());
+        assert!(!finish_target(&registry, &a, "main", &instance, false, false).unwrap());
+        assert!(Path::new(&path).exists());
+        let temp = fixture.0.join("other.tmp"); std::fs::write(&temp, "B").unwrap(); std::fs::rename(&temp, &path).unwrap();
+        assert!(finish_target(&registry, &b, "main", &instance, true, true).unwrap());
+        assert!(!finish_target(&registry, &a, "main", &instance, false, false).unwrap());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "B");
+    }
+
+    #[test]
+    fn the_last_cancelled_reservation_cleans_up_its_new_file() {
+        let fixture = Fixture::new(); let registry = registry(); let instance = instance(&registry, "main").unwrap();
+        let document = uuid::Uuid::new_v4().to_string(); let destination = fixture.0.join("new.md");
+        let (path, a) = reserved(reserve_target(&registry, destination.to_str().unwrap(), "main", &instance, &document, None, 1).unwrap());
+        let (_, b) = reserved(reserve_target(&registry, &path, "main", &instance, &document, None, 2).unwrap());
+        finish_target(&registry, &a, "main", &instance, false, false).unwrap();
+        finish_target(&registry, &b, "main", &instance, false, false).unwrap();
+        assert!(!Path::new(&path).exists());
+        assert!(registry.0.lock().unwrap().files.is_empty());
+    }
+
+    #[test]
+    fn an_atomic_empty_save_is_not_deleted_by_cancelled_cleanup() {
+        let fixture = Fixture::new(); let registry = registry(); let instance = instance(&registry, "main").unwrap();
+        let document = uuid::Uuid::new_v4().to_string(); let destination = fixture.0.join("new.md");
+        let (path, token) = reserved(reserve_target(&registry, destination.to_str().unwrap(), "main", &instance, &document, None, 1).unwrap());
+        let temp = fixture.0.join("empty.tmp"); std::fs::write(&temp, "").unwrap(); std::fs::rename(&temp, &path).unwrap();
+        finish_target(&registry, &token, "main", &instance, false, false).unwrap();
+        assert_eq!(std::fs::read_to_string(path).unwrap(), "");
+    }
+
+    #[test]
+    fn delayed_completion_and_delayed_release_cannot_replace_a_new_binding() {
+        let fixture = Fixture::new(); let registry = registry(); let instance = instance(&registry, "main").unwrap();
+        let source = claim(&registry, &fixture.path(), "main").unwrap();
+        let a_path = fixture.0.join("a.md"); let b_path = fixture.0.join("b.md");
+        let (a_path, a) = reserved(reserve_target(&registry, a_path.to_str().unwrap(), "main", &instance, &source.document_id, Some(&source.file_path), 1).unwrap());
+        let (b_path, b) = reserved(reserve_target(&registry, b_path.to_str().unwrap(), "main", &instance, &source.document_id, Some(&source.file_path), 2).unwrap());
+        assert!(finish_target(&registry, &b, "main", &instance, true, true).unwrap());
+        assert!(!finish_target(&registry, &a, "main", &instance, true, true).unwrap());
+        assert!(!release_open_file(&registry, &b_path, "main", &instance, Some("old-document")).unwrap());
+        let state = registry.0.lock().unwrap();
+        assert!(state.files[&b_path].opened);
+        assert!(!state.files.contains_key(&a_path));
+        assert!(!state.files.contains_key(&source.file_path));
+    }
+
+    #[test]
+    fn a_newer_failed_save_does_not_invalidate_the_older_reservation() {
+        let fixture = Fixture::new(); let registry = registry(); let instance = instance(&registry, "main").unwrap();
+        let source = claim(&registry, &fixture.path(), "main").unwrap();
+        let (_, a) = reserved(reserve_target(&registry, &source.file_path, "main", &instance, &source.document_id, Some(&source.file_path), 1).unwrap());
+        let (_, b) = reserved(reserve_target(&registry, &source.file_path, "main", &instance, &source.document_id, Some(&source.file_path), 2).unwrap());
+        finish_target(&registry, &b, "main", &instance, false, false).unwrap();
+        assert!(finish_target(&registry, &a, "main", &instance, true, true).unwrap());
+    }
+
+    #[test]
+    fn reload_cannot_release_a_target_while_its_old_write_is_unresolved() {
+        let fixture = Fixture::new(); let registry = registry(); let old = instance(&registry, "main").unwrap();
+        let source = claim(&registry, &fixture.path(), "main").unwrap();
+        let (_, token) = reserved(reserve_target(&registry, &source.file_path, "main", &old, &source.document_id, Some(&source.file_path), 1).unwrap());
+        frontend_loaded(&registry, "main").unwrap();
+        assert!(!claim(&registry, &source.file_path, "other").unwrap().acquired);
+        assert!(!finish_target(&registry, &token, "main", &old, true, true).unwrap());
+        assert!(claim(&registry, &source.file_path, "other").unwrap().acquired);
+    }
+
+    #[test]
+    fn deleted_owned_target_is_rejected_without_recreating_it() {
+        let fixture = Fixture::new(); let registry = registry(); let instance = instance(&registry, "main").unwrap();
+        claim(&registry, &fixture.path(), "other").unwrap(); std::fs::remove_file(fixture.path()).unwrap();
+        let document = uuid::Uuid::new_v4().to_string();
+        assert!(matches!(reserve_target(&registry, &fixture.path(), "main", &instance, &document, None, 1).unwrap(), SaveTargetClaim::Occupied { .. }));
+        assert!(!Path::new(&fixture.path()).exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn new_reservations_are_private_and_symlink_aliases_share_the_existing_owner() {
+        use std::os::unix::{fs::PermissionsExt, fs::symlink};
+        let fixture = Fixture::new(); let registry = registry(); let instance = instance(&registry, "main").unwrap();
+        let document = uuid::Uuid::new_v4().to_string(); let target = fixture.0.join("new.md");
+        let (path, token) = reserved(reserve_target(&registry, target.to_str().unwrap(), "main", &instance, &document, None, 1).unwrap());
+        assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        let alias = fixture.0.join("alias.md"); symlink(&path, &alias).unwrap();
+        assert!(!claim(&registry, alias.to_str().unwrap(), "other").unwrap().acquired);
+        finish_target(&registry, &token, "main", &instance, false, false).unwrap();
+    }
+
+    #[test]
+    fn invalid_targets_and_wrong_document_ids_do_not_mutate_files_or_registration() {
+        let fixture = Fixture::new(); let registry = registry(); let instance = instance(&registry, "main").unwrap();
+        let source = claim(&registry, &fixture.path(), "main").unwrap();
+        let target = fixture.0.join("new.md");
+        let wrong = uuid::Uuid::new_v4().to_string();
+        assert!(reserve_target(&registry, target.to_str().unwrap(), "main", &instance, &wrong, Some(&source.file_path), 1).is_err());
+        assert!(!target.exists());
+        assert!(reserve_target(&registry, fixture.0.to_str().unwrap(), "main", &instance, &source.document_id, Some(&source.file_path), 1).is_err());
+        assert!(reserve_target(&registry, fixture.0.join("missing/new.md").to_str().unwrap(), "main", &instance, &source.document_id, Some(&source.file_path), 1).is_err());
+        assert_eq!(std::fs::read_to_string(&source.file_path).unwrap(), "Original");
+        assert_eq!(registry.0.lock().unwrap().files.len(), 1);
+        assert!(registry.0.lock().unwrap().reservations.is_empty());
+    }
+
+    #[test]
+    fn native_finalization_does_not_publish_a_binding_rejected_by_the_frontend() {
+        let fixture = Fixture::new(); let registry = registry(); let instance = instance(&registry, "main").unwrap();
+        let source = claim(&registry, &fixture.path(), "main").unwrap();
+        let target = fixture.0.join("new.md");
+        let (path, token) = reserved(reserve_target(&registry, target.to_str().unwrap(), "main", &instance, &source.document_id, Some(&source.file_path), 1).unwrap());
+        assert!(!finish_target(&registry, &token, "main", &instance, true, false).unwrap());
+        let state = registry.0.lock().unwrap();
+        assert!(state.files[&source.file_path].opened);
+        assert!(!state.files.contains_key(&path));
+    }
+
+    #[test]
+    fn windows_ambiguous_file_names_are_rejected_before_creation() {
+        for name in ["CON.md", "aux", "lPt1.txt", "COM¹.md", "name.", "name ", "file:stream", "NUL .md", "a?b.md"] {
+            assert!(!valid_windows_save_name(name), "{name}");
+        }
+        for name in ["document.md", "Notes 2026.md", "Årsrapport.md", "comparison.md"] {
+            assert!(valid_windows_save_name(name), "{name}");
+        }
+    }
+
+    #[test]
+    fn another_frontend_cannot_reuse_a_document_identity_from_a_pending_reservation() {
+        let fixture = Fixture::new(); let registry = registry();
+        let a = instance(&registry, "main").unwrap(); let b = instance(&registry, "other").unwrap();
+        let document = uuid::Uuid::new_v4().to_string();
+        let first = fixture.0.join("a.md"); let second = fixture.0.join("b.md");
+        reserved(reserve_target(&registry, first.to_str().unwrap(), "main", &a, &document, None, 1).unwrap());
+        assert!(reserve_target(&registry, second.to_str().unwrap(), "other", &b, &document, None, 1).is_err());
+        assert!(!second.exists());
+        assert_eq!(registry.0.lock().unwrap().files.len(), 1);
+    }
+
 }
 
 // Counter for unique window IDs
@@ -429,8 +867,9 @@ fn unregister_open_file(
     window: tauri::Window,
     file_path: String,
     frontend_instance: String,
+    document_id: Option<String>,
 ) -> Result<bool, String> {
-    release_open_file(&registry, &file_path, window.label(), &frontend_instance)
+    release_open_file(&registry, &file_path, window.label(), &frontend_instance, document_id.as_deref())
 }
 
 // Unregister all files for a specific window (when window closes)
@@ -444,7 +883,8 @@ fn unregister_window_files(
     if window.label() != window_label { return Err("Cannot release another window's files".into()); }
     let mut state = registry.0.lock().map_err(|_| "Open-file registry is unavailable")?;
     validate_frontend_instance(&state, window.label(), &frontend_instance)?;
-    state.files.retain(|_, label| label != &window_label);
+    for owner in state.files.values_mut().filter(|owner| owner.window_label == window_label) { owner.opened = false; }
+    state.files.retain(|_, owner| owner.opened || !owner.leases.is_empty());
     Ok(())
 }
 
@@ -456,7 +896,7 @@ fn check_file_open(
 ) -> Result<Option<String>, String> {
     let canonical = normalize_open_file(&file_path)?;
     let files = registry.0.lock().map_err(|_| "Open-file registry is unavailable")?;
-    Ok(files.files.get(&canonical).cloned())
+    Ok(files.files.get(&canonical).map(|owner| owner.window_label.clone()))
 }
 
 // Focus the window that has a specific file open
@@ -469,7 +909,7 @@ async fn focus_window_with_file(
     let file_path = normalize_open_file(&file_path)?;
     let window_label = {
         let files = registry.0.lock().map_err(|_| "Open-file registry is unavailable")?;
-        files.files.get(&file_path).cloned()
+        files.files.get(&file_path).map(|owner| owner.window_label.clone())
     };
 
     if let Some(label) = window_label {
@@ -488,6 +928,28 @@ async fn focus_window_with_file(
         }
     }
     Ok(false)
+}
+
+#[tauri::command]
+fn reserve_save_target(app: tauri::AppHandle, registry: tauri::State<'_, OpenFilesRegistry>, window: tauri::Window,
+    file_path: String, frontend_instance: String, document_id: String, source_path: Option<String>, sequence: u64) -> Result<SaveTargetClaim, String> {
+    let requested = Path::new(&file_path);
+    let resolved = if std::fs::symlink_metadata(requested).is_ok() {
+        std::fs::canonicalize(requested).map_err(|e| e.to_string())?
+    } else {
+        let parent = requested.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
+        std::fs::canonicalize(parent).map_err(|e| e.to_string())?.join(requested.file_name().ok_or("Missing file name")?)
+    };
+    if !app.fs_scope().is_allowed(&file_path) || !app.fs_scope().is_allowed(&resolved) {
+        return Err("Save target is outside the permitted filesystem scope".into());
+    }
+    reserve_target(&registry, resolved.to_str().ok_or("Non-Unicode save path")?, window.label(), &frontend_instance, &document_id, source_path.as_deref(), sequence)
+}
+
+#[tauri::command]
+fn finish_save_target(registry: tauri::State<'_, OpenFilesRegistry>, window: tauri::Window,
+    reservation_id: String, frontend_instance: String, committed: bool, publish: bool) -> Result<bool, String> {
+    finish_target(&registry, &reservation_id, window.label(), &frontend_instance, committed, publish)
 }
 
 // Dedicated window that renders the print-ready document for native printing.
@@ -559,10 +1021,13 @@ fn get_current_window_label(window: tauri::Window) -> String {
 async fn transfer_tab_to_window(
     app: tauri::AppHandle,
     registry: tauri::State<'_, OpenFilesRegistry>,
+    window: tauri::Window,
     file_path: String,
     source_window: String,
     target_window: String,
+    frontend_instance: String,
 ) -> Result<(), String> {
+    if window.label() != source_window { return Err("Cannot transfer another window's document".into()); }
     let payload = TabTransferPayload {
         file_path: file_path.clone(),
         source_window: source_window.clone(),
@@ -571,8 +1036,10 @@ async fn transfer_tab_to_window(
 
     if let Some(target) = app.get_webview_window(&target_window) {
         {
-            let mut files = registry.0.lock().unwrap();
-            commit_tab_transfer(&mut files.files, &file_path, &source_window, &target_window, || {
+            let mut files = registry.0.lock().map_err(|_| "Open-file registry is unavailable")?;
+            validate_frontend_instance(&files, window.label(), &frontend_instance)?;
+            let target_instance = files.frontend_instances.get(&target_window).ok_or("Target frontend is unavailable")?.clone();
+            commit_tab_transfer(&mut files.files, &file_path, &source_window, &target_window, &target_instance, || {
                 target.emit("tab-transfer", payload).map_err(|e| e.to_string())
             })?;
         }
@@ -586,17 +1053,22 @@ async fn transfer_tab_to_window(
 }
 
 fn commit_tab_transfer(
-    files: &mut HashMap<String, String>,
+    files: &mut HashMap<String, FileOwner>,
     file_path: &str,
     source_window: &str,
     target_window: &str,
+    target_instance: &str,
     deliver: impl FnOnce() -> Result<(), String>,
 ) -> Result<(), String> {
     let previous = files.get(file_path).cloned();
-    if previous.as_deref().is_some_and(|owner| owner != source_window) {
+    if previous.as_ref().is_some_and(|owner| owner.window_label != source_window || !owner.leases.is_empty()) {
         return Err("Source window no longer owns the file".to_string());
     }
-    files.insert(file_path.to_string(), target_window.to_string());
+    let mut target_owner = previous.clone().ok_or("The transferred file is not registered")?;
+    target_owner.window_label = target_window.into();
+    target_owner.frontend_instance = target_instance.into();
+    target_owner.binding_sequence = 0;
+    files.insert(file_path.to_string(), target_owner);
     if let Err(error) = deliver() {
         match previous {
             Some(owner) => { files.insert(file_path.to_string(), owner); }
@@ -609,28 +1081,30 @@ fn commit_tab_transfer(
 
 #[cfg(test)]
 mod tab_transfer_tests {
-    use super::commit_tab_transfer;
+    use super::{commit_tab_transfer, FileOwner};
+    use std::collections::BTreeSet;
+    fn owner(label: &str) -> FileOwner { FileOwner { window_label: label.into(), frontend_instance: "instance".into(), document_id: "doc".into(), opened: true, binding_sequence: 0, leases: BTreeSet::new(), pending_file: None } }
     use std::collections::HashMap;
 
     #[test]
     fn successful_transfer_moves_ownership() {
-        let mut files = HashMap::from([("doc.md".to_string(), "main".to_string())]);
-        commit_tab_transfer(&mut files, "doc.md", "main", "target", || Ok(())).unwrap();
-        assert_eq!(files.get("doc.md").map(String::as_str), Some("target"));
+        let mut files = HashMap::from([("doc.md".to_string(), owner("main"))]);
+        commit_tab_transfer(&mut files, "doc.md", "main", "target", "instance", || Ok(())).unwrap();
+        assert_eq!(files.get("doc.md").map(|owner| owner.window_label.as_str()), Some("target"));
     }
 
     #[test]
     fn failed_delivery_restores_ownership() {
-        let mut files = HashMap::from([("doc.md".to_string(), "main".to_string())]);
-        assert!(commit_tab_transfer(&mut files, "doc.md", "main", "target", || Err("missing".to_string())).is_err());
-        assert_eq!(files.get("doc.md").map(String::as_str), Some("main"));
+        let mut files = HashMap::from([("doc.md".to_string(), owner("main"))]);
+        assert!(commit_tab_transfer(&mut files, "doc.md", "main", "target", "instance", || Err("missing".to_string())).is_err());
+        assert_eq!(files.get("doc.md").map(|owner| owner.window_label.as_str()), Some("main"));
     }
 
     #[test]
     fn rejects_another_owner_before_delivery() {
-        let mut files = HashMap::from([("doc.md".to_string(), "other".to_string())]);
-        assert!(commit_tab_transfer(&mut files, "doc.md", "main", "target", || panic!("must not deliver")).is_err());
-        assert_eq!(files.get("doc.md").map(String::as_str), Some("other"));
+        let mut files = HashMap::from([("doc.md".to_string(), owner("other"))]);
+        assert!(commit_tab_transfer(&mut files, "doc.md", "main", "target", "instance", || panic!("must not deliver")).is_err());
+        assert_eq!(files.get("doc.md").map(|owner| owner.window_label.as_str()), Some("other"));
     }
 }
 
@@ -1530,6 +2004,8 @@ pub fn run() {
             print_document,
             transfer_tab_to_window,
             register_open_file,
+            reserve_save_target,
+            finish_save_target,
             unregister_open_file,
             unregister_window_files,
             check_file_open,

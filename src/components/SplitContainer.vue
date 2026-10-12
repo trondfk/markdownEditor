@@ -5,9 +5,9 @@ import { useTabDrag } from '../composables/useTabDrag';
 import { useWindowManager } from '../composables/useWindowManager';
 import { htmlToMarkdown } from '../utils/markdown-converter';
 import { wouldTruncateDocument } from '../utils/save-guard';
-import { atomicWriteTextFile } from '../utils/atomic-write';
+import { writeReservedSave, type SaveTargetReserver } from '../utils/save-target';
 import { auditShrink } from '../utils/save-audit';
-import { captureSaveState, completeSave, isSaveStateCurrent } from '../utils/save-state';
+import { captureSaveSnapshot, syncSaveSnapshot, isSaveStateCurrent } from '../utils/save-state';
 import { ratioFromPointer } from '../utils/resize';
 import type { Tab } from '../composables/useTabs';
 import EditorPane from './EditorPane.vue';
@@ -42,6 +42,7 @@ const {
 } = useWindowManager();
 
 const props = defineProps<{
+  reserveSaveTarget: SaveTargetReserver;
   /**
    * Serializes a tab to markdown, or returns null when no mounted editor can
    * supply its text. Injected because the mode state that decides this lives in
@@ -99,15 +100,17 @@ onMounted(() => {
         console.error('[transfer] no editor could supply content for', filePath);
         return;
       }
-      const state = captureSaveState(tab, source);
+      const state = captureSaveSnapshot(tab, source);
       const markdownContent = source.trimEnd();
       if (wouldTruncateDocument(markdownContent, tab.originalMarkdown)) {
         console.error('[transfer] refused to empty', filePath);
         return;
       }
       auditShrink('tab-transfer', filePath, markdownContent, tab.originalMarkdown);
-      await atomicWriteTextFile(filePath, markdownContent);
-      if (!completeSave(state, filePath, markdownContent)) return;
+      const lease = await props.reserveSaveTarget(state, filePath);
+      if (!lease) return;
+      syncSaveSnapshot(state);
+      if (!await writeReservedSave(state, markdownContent, lease)) return;
 
       // Get current window label and all windows
       const currentWindow = await getCurrentWindowLabel();

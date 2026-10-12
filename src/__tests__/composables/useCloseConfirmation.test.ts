@@ -80,6 +80,7 @@ describe('useCloseConfirmation', () => {
   });
 
   const createMockOptions = (unsaved: UnsavedTab[] = []) => ({
+    reserveSaveTarget: vi.fn(async (_state: unknown, filePath: string) => ({ filePath, created: false, finish: vi.fn(async () => true) })),
     collectUnsavedTabs: vi.fn(() => unsaved),
     getTabMarkdown: vi.fn((_paneId: string, tab: Tab) => tab.content),
     switchToTab: vi.fn(() => Promise.resolve()),
@@ -546,4 +547,21 @@ describe('useCloseConfirmation', () => {
       expect(tab.hasChanges).toBe(true);
     });
   });
+  it('refuses first-time close-save to an owned target without changing either file or tab', async () => {
+    const tab = createMockTab({ hasChanges: true, markdown: 'New work' });
+    fsMocks.files.set('/owned.md', 'Other saved work');
+    const before = { ...tab };
+    const options = { ...createMockOptions([{ paneId: 'left', tab }]), reserveSaveTarget: vi.fn(async () => null) };
+    const { save } = await import('@tauri-apps/plugin-dialog');
+    vi.mocked(save).mockResolvedValueOnce('/owned.md');
+    const closing = useCloseConfirmation(options);
+    await closing.setupCloseHandler(); await requestClose(); await closing.handleSave();
+    expect({ ...tab }).toEqual(before);
+    expect([...fsMocks.files]).toEqual([['/owned.md', 'Other saved work']]);
+    expect(fsMocks.writeTextFile).not.toHaveBeenCalled();
+    expect(closing.showSaveConfirmDialog.value).toBe(true);
+    expect(exit).not.toHaveBeenCalled();
+    expect(options.reserveSaveTarget).toHaveBeenCalledTimes(1);
+  });
+
 });

@@ -108,6 +108,7 @@ const makeOptions = (tabOverrides: Partial<Tab> = {}, extraOptions: Record<strin
 
   return {
     options: {
+      reserveSaveTarget: vi.fn(async (_state: unknown, filePath: string) => ({ filePath, created: false, finish: vi.fn(async () => true) })),
       tabs,
       activeTabId,
       activeTab,
@@ -1193,18 +1194,124 @@ describe('useFileOperations', () => {
 
       const { options, createNewTab, tabs } = makeOptions();
       tabs.value.push(makeTab({ id: 'new-tab-id', filePath: null, content: '', originalMarkdown: null }));
-      const { openFileInNewTab } = useFileOperations({ ...options, onLargeFileOpened });
+      let loader!: (path: string) => Promise<boolean>;
+      const openOwnedFile = vi.fn(async (path: string) => { expect(await loader(path)).toBe(true); });
+      const operations = useFileOperations({ ...options, onLargeFileOpened, openOwnedFile });
+      loader = operations.openFileFromPath;
+      await operations.openFileInNewTab('big.md');
+      expect(openOwnedFile).toHaveBeenCalledExactlyOnceWith('/test/big.md');
 
-      await openFileInNewTab('big.md');
-
-      expect(createNewTab).toHaveBeenCalledWith('test/big.md', '', 'big.md');
+      expect(createNewTab).toHaveBeenCalledWith('/test/big.md', '', 'big.md');
       const newTab = tabs.value.find(t => t.id === 'new-tab-id')!;
       expect(newTab.largeFile).toBe(true);
       expect(newTab.pendingMarkdown).toBe(bigContent);
       expect(markdownToHtml).not.toHaveBeenCalled();
-      expect(onLargeFileOpened).toHaveBeenCalledWith('test/big.md', bigContent);
+      expect(onLargeFileOpened).toHaveBeenCalledWith('/test/big.md', bigContent);
     });
   });
+  it('does not report its own intervening save as an external conflict', async () => {
+    const { options, tabs } = makeOptions({ content: '<p>A</p>', markdown: 'md:<p>A</p>' });
+    options.getEditorHtml.mockImplementation(() => tabs.value[0].content);
+    const entered = deferred<void>(), release = deferred<void>();
+    let targetReads = 0;
+    mockReadTextFile.mockImplementation(async path => {
+      if (path === '/test/file.md' && ++targetReads === 2) { entered.resolve(); await release.promise; }
+      if (!mockFiles.has(path)) throw new Error(`ENOENT: ${path}`);
+      return mockFiles.get(path)!;
+    });
+    const renameEntered = deferred<void>(), renameRelease = deferred<void>();
+    const move = mockRename.getMockImplementation()!;
+    mockRename.mockImplementationOnce(async (from, to) => { renameEntered.resolve(); await renameRelease.promise; await move(from, to); });
+    const conflict = vi.fn(async () => 'save' as const);
+    const operations = useFileOperations({ ...options, onPreSaveConflict: conflict });
+    const first = operations.saveFile();
+    await renameEntered.promise;
+    tabs.value[0].content = '<p>B</p>';
+    setDocumentMarkdown(tabs.value[0], 'md:<p>B</p>');
+    const second = operations.saveFile();
+    try {
+      await entered.promise;
+      renameRelease.resolve();
+      expect(await first).toBe(false);
+      release.resolve();
+      expect(await second).toBe(true);
+      expect(conflict).not.toHaveBeenCalled();
+      expect(mockFiles.get('/test/file.md')).toBe('md:<p>B</p>');
+    } finally { renameRelease.resolve(); release.resolve(); await Promise.allSettled([first, second]); }
+  });
+
+  it('does not load an editable copy when the owned link opener rejects the request', async () => {
+    const { options, createNewTab } = makeOptions();
+    const openOwnedFile = vi.fn(async () => { throw new Error('Already owned or unavailable'); });
+    await useFileOperations({ ...options, openOwnedFile }).openFileInNewTab('other.md');
+    expect(openOwnedFile).toHaveBeenCalledExactlyOnceWith('/test/other.md');
+    expect(mockReadTextFile).not.toHaveBeenCalled();
+    expect(createNewTab).not.toHaveBeenCalled();
+  });
+
+  describe('Save As target ownership', () => {
+    it.each(['another tab', 'another pane', 'another window', 'empty source'])
+      ('never writes or changes document state when the target belongs to %s', async scenario => {
+        const empty = scenario === 'empty source';
+        const { options, tabs } = makeOptions({ content: empty ? '<p></p>' : '<p>A</p>', markdown: empty ? '' : 'md:<p>A</p>' });
+        const source = tabs.value[0];
+        const other = makeTab({ id: 'other', filePath: '/test/owned.md', content: '<p>Other edits</p>', markdown: 'Other edits', originalMarkdown: 'Other saved content', hasChanges: true });
+        mockFiles.set('/test/owned.md', 'Other saved content');
+        mockSaveDialog.mockResolvedValueOnce('/test/owned.md');
+        mockReadTextFile.mockImplementation(async path => mockFiles.get(path)!);
+        const reserveSaveTarget = vi.fn(async () => null);
+        const conflict = vi.fn(async () => 'save' as const);
+        const before = { source: { ...source }, other: { ...other }, files: [...mockFiles] };
+        const configured = { ...options, getMarkdownOverride: () => empty ? '' : 'md:<p>A</p>', reserveSaveTarget, onPreSaveConflict: conflict };
+        await useFileOperations(configured).saveFileAs();
+        expect.soft([...mockFiles]).toEqual(before.files);
+        expect.soft({ ...source }).toEqual(before.source);
+        expect.soft({ ...other }).toEqual(before.other);
+        expect.soft(mockWriteTextFile).not.toHaveBeenCalled();
+        expect.soft(conflict).not.toHaveBeenCalled();
+        expect(reserveSaveTarget).toHaveBeenCalledTimes(1);
+      });
+
+    it('releases only its reservation after a failed Save As write', async () => {
+      const { options, tabs } = makeOptions();
+      mockReadTextFile.mockImplementation(async path => mockFiles.get(path)!);
+      const finish = vi.fn(async () => true);
+      const reserveSaveTarget = vi.fn(async () => ({ filePath: '/test/new.md', created: false, finish }));
+      mockSaveDialog.mockResolvedValueOnce('/test/new.md');
+      mockRename.mockRejectedValueOnce(new Error('Write rejected'));
+      const configured = { ...options, reserveSaveTarget };
+      await useFileOperations(configured).saveFileAs();
+      expect(finish).toHaveBeenCalledExactlyOnceWith(false);
+      expect(tabs.value[0].filePath).toBe('/test/file.md');
+      expect(mockFiles.get('/test/file.md')).toBe('# hello');
+    });
+    it('publishes binding before ownership release and preserves edits made during the acknowledgement', async () => {
+      const { options, tabs } = makeOptions();
+      mockReadTextFile.mockImplementation(async path => mockFiles.get(path)!);
+      mockSaveDialog.mockResolvedValueOnce('/test/new.md');
+      const entered = deferred<void>(), release = deferred<void>();
+      const finish = vi.fn(async (committed: boolean, publish?: boolean) => {
+        expect(committed).toBe(true); expect(publish).toBe(true);
+        expect(tabs.value[0].filePath).toBe('/test/new.md');
+        expect(tabs.value[0].originalMarkdown).toBe('md:<p>hello</p>');
+        expect(mockFiles.get('/test/new.md')).toBe('md:<p>hello</p>');
+        entered.resolve(); await release.promise; return true;
+      });
+      const configured = { ...options, reserveSaveTarget: async () => ({ filePath: '/test/new.md', created: true, finish }) };
+      const saving = useFileOperations(configured).saveFileAs();
+      try {
+        await entered.promise;
+        tabs.value[0].content = '<p>Newer edits</p>';
+        setDocumentMarkdown(tabs.value[0], 'Newer edits');
+        release.resolve(); await saving;
+        expect(tabs.value[0].markdown).toBe('Newer edits');
+        expect(tabs.value[0].hasChanges).toBe(true);
+        expect(tabs.value[0].originalMarkdown).toBe('md:<p>hello</p>');
+      } finally { release.resolve(); await saving; }
+    });
+
+  });
+
 });
 
 // ============================================================
@@ -1382,4 +1489,5 @@ describe('handleLinkClick — anchors', () => {
     expect(() => handleLinkClick('#a%zz')).not.toThrow();
     expect(onAnchorNotFound).toHaveBeenCalledTimes(2);
   });
+
 });
