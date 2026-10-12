@@ -67,19 +67,17 @@ import { HighlightExtension } from "../extensions/HighlightExtension";
 import { Placeholder } from "@tiptap/extension-placeholder";
 import { CharacterCount } from "@tiptap/extension-character-count";
 import { common, createLowlight } from "lowlight";
-import { watch, ref, nextTick, computed, watchEffect, onBeforeUnmount } from "vue";
+import { watch, ref, nextTick, computed, onBeforeUnmount } from "vue";
 import { Extension, Node, mergeAttributes, textblockTypeInputRule } from "@tiptap/core";
 import { useEditorZoom } from "../composables/useEditorZoom";
 import { useSettings } from "../composables/useSettings";
 import { useFootnotes } from "../composables/useFootnotes";
-import { useLineNumbers } from "../composables/useLineNumbers";
 import { resolveEditorImages, getDirectoryFromFilePath } from "../utils/image-resolver";
 import { importImageBytes } from "../services/imageImport";
 import { clipboardHtmlToEditorHtml, isInternalEditorHtml } from "../utils/clipboard-html";
 import { isLeftMarginClick, visualLineRange } from "../utils/visual-line-select";
 import TableContextMenu from "./TableContextMenu.vue";
 import ImagePreview from "./ImagePreview.vue";
-import EditorGutter from "./EditorGutter.vue";
 
 // Guards against false hasChanges during programmatic content updates.
 // Starts at 1 to cover initial editor creation; released after 300ms.
@@ -805,19 +803,6 @@ watch(() => appSettings.value.spellcheck, (newVal) => {
   }
 });
 
-const proseMirrorRef = ref<HTMLElement | null>(null);
-const contentWrapperRef = ref<HTMLElement | null>(null);
-const showLineNumbersRef = computed(() => appSettings.value.showLineNumbers);
-const { lines: lineNumberEntries } = useLineNumbers({
-  containerRef: proseMirrorRef,
-  anchorRef: contentWrapperRef,
-  enabled: showLineNumbersRef,
-});
-
-watchEffect(() => {
-  proseMirrorRef.value = (editor.value?.view?.dom as HTMLElement | undefined) ?? null;
-});
-
 const getSearchTextMap = (): VisualTextMap | null => {
   const ed = editor.value;
   if (!ed) return null;
@@ -942,12 +927,9 @@ defineExpose({
     @mouseout="(e) => { footnotes.handleMouseOut(e); handleEditorMouseOut(e); }"
   >
     <div
-      ref="contentWrapperRef"
       class="editor-content-wrapper"
-      :class="{ 'has-line-numbers': appSettings.showLineNumbers }"
       :style="editorZoomStyle"
     >
-      <EditorGutter v-if="appSettings.showLineNumbers" :lines="lineNumberEntries" />
       <EditorContent :editor="editor" class="editor-content" />
     </div>
     <TableContextMenu
@@ -1032,16 +1014,6 @@ defineExpose({
   width: 100%;
   max-width: 900px;
   margin: 20px auto;
-}
-
-.editor-content-wrapper.has-line-numbers {
-  --editor-gutter-width: 3.5em;
-}
-
-.editor-content-wrapper.has-line-numbers .editor-content {
-  /* Side padding still respects the line-number gutter; user's setting
-     is added on top of the fixed gutter width. */
-  padding-left: calc(var(--editor-pad-x, 80px) + var(--editor-gutter-width));
 }
 
 .editor-content {

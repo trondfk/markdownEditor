@@ -200,7 +200,7 @@ The full feature list, including snapshot rotation, tmp-recovery on crashed sess
 - **Keyboard shortcuts** for efficient editing
 - **Configurable padding** — top, side and bottom sliders in Settings
 
-Code view displays the Markdown source, including consecutive blank lines. Opening a file, switching views without editing, and saving an unchanged copy preserve the original source. The visual editor renders Markdown structure rather than every physical blank line; real visual edits regenerate Markdown and may normalize source formatting. Use Code view to inspect source lines and edit blank lines between paragraphs. Visual gutter labels such as `V1` count rendered rows; Code view shows Markdown source line numbers.
+Code view displays the Markdown source, including consecutive blank lines. Opening a file, switching views without editing, and saving an unchanged copy preserve the original source. The visual editor renders Markdown structure rather than every physical blank line; real visual edits regenerate Markdown and may normalize source formatting. Use Code view to inspect source lines and edit blank lines between paragraphs. Line numbers are shown only in Code view and the code pane of Code + Preview.
 
 ### Mermaid Diagrams
 - **Flowcharts**, **sequence**, **class**, **state**, **ER**, **Gantt**, **pie** and many more diagram types
