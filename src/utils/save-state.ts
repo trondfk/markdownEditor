@@ -32,6 +32,13 @@ export function getDocumentMarkdown(tab: Tab): string {
   return tab.markdown ?? normalize(tab.originalMarkdown ?? tab.pendingMarkdown ?? htmlToMarkdown(tab.content));
 }
 
+/** Reuse saved spelling and whitespace while the authoritative text is unchanged. */
+export function getDocumentSource(tab: Tab): string {
+  const markdown = getDocumentMarkdown(tab);
+  return tab.originalMarkdown !== null && normalize(markdown) === normalize(tab.originalMarkdown)
+    ? tab.originalMarkdown : markdown;
+}
+
 export function refreshDirtyState(tab: Tab): void {
   tab.hasChanges = getDocumentMarkdown(tab) !== normalize(tab.originalMarkdown ?? '');
 }

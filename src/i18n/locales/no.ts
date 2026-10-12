@@ -218,6 +218,7 @@ const no: Translations = {
   mermaidCustomFormatHelp: 'Definer et vilkårlig par med markører. Skriv nøyaktig tegnene som starter åpningslinjen (f.eks. <<<mermaid) og avslutningslinjen (f.eks. >>>). Når begge feltene er fylt ut, dukker formatet opp i nedtrekkslisten og i listen over formater som leses. Standardformatet (```mermaid) gjenkjennes alltid uansett hva som står her.',
   spellcheck: 'Stavekontroll',
   showLineNumbers: 'Linjenumre',
+  visualLineNumbers: 'Visuelle linjer (V), ikke linjenumre i Markdown-kilden. Bruk kodevisning for kildelinjer.',
   expandTabs: 'Utvid faner slik at navnet får plass',
   appearance: 'Utseende',
   editor: 'Editor',

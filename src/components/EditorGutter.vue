@@ -2,6 +2,9 @@
      ABOUTME: Width matches --editor-gutter-width so numbers stay left of the text. -->
 <script setup lang="ts">
 import type { LineEntry } from '../composables/useLineNumbers';
+import { useI18n } from '../i18n';
+
+const { t } = useI18n();
 
 defineProps<{
   lines: LineEntry[];
@@ -9,7 +12,7 @@ defineProps<{
 </script>
 
 <template>
-  <div class="editor-gutter" aria-hidden="true">
+  <div class="editor-gutter" aria-hidden="true" data-line-number-kind="visual" :title="t.visualLineNumbers">
     <span
       v-for="line in lines"
       :key="line.num"
@@ -18,7 +21,7 @@ defineProps<{
         top: `${line.top}px`,
         height: `${line.height}px`,
       }"
-    >{{ line.num }}</span>
+    >V{{ line.num }}</span>
   </div>
 </template>
 

@@ -30,6 +30,17 @@ vi.mock('../../composables/useEditorZoom', () => ({
 }));
 
 describe('CodeEditor virtualization (issue #129)', () => {
+  it('keeps consecutive blank source lines and counts them in the code gutter', async () => {
+    const source = '# Heading\n\n\n\nParagraph\n\n';
+    const wrapper = mount(CodeEditor, { props: { modelValue: source } });
+    try {
+      await nextTick();
+      expect(wrapper.vm.editor.getValue()).toBe(source);
+      expect(wrapper.findAll('.cm-line')).toHaveLength(7);
+      expect(wrapper.findAll('.cm-lineNumbers .cm-gutterElement').slice(1).map(line => line.text())).toEqual(['1', '2', '3', '4', '5', '6', '7']);
+    } finally { wrapper.unmount(); }
+  });
+
   it('exposes the complete editable document through the editor handle', async () => {
     const wrapper = mount(CodeEditor, { props: { modelValue: 'a\nb\nc' } });
     await nextTick();

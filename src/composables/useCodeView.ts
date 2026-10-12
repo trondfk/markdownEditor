@@ -16,6 +16,7 @@ import {
 
 export interface UseCodeViewOptions {
   getActiveContent: () => string;
+  getActiveMarkdown?: () => string | null;
   setActiveContent: (content: string) => void;
   markAsChanged: () => void;
   /** When true at CODE→VISUAL time, convert even if the snapshot is unchanged —
@@ -591,19 +592,18 @@ export function useCodeView(options: UseCodeViewOptions): UseCodeViewReturn {
   // Inject styles on module load
   injectHighlightStyles();
 
-  const { getActiveContent, setActiveContent, markAsChanged, forceConvertOnExit } = options;
+  const { getActiveContent, getActiveMarkdown, setActiveContent, markAsChanged, forceConvertOnExit } = options;
 
   const enterCodeViewWithMarkdown = async (markdown: string): Promise<void> => {
-    codeContent.value = markdown;
-    codeContentSnapshot = markdown;
+    seedCodeContent(markdown);
     codeView.value = true;
     await nextTick();
     codeEditorRef.value?.focus();
   };
 
   const seedCodeContent = (markdown: string): void => {
-    codeContent.value = markdown;
-    codeContentSnapshot = markdown;
+    codeContent.value = markdown.replace(/\r\n/g, '\n');
+    codeContentSnapshot = codeContent.value;
   };
 
   const toggleCodeView = async (editor: Editor | null | undefined): Promise<void> => {
@@ -615,11 +615,12 @@ export function useCodeView(options: UseCodeViewOptions): UseCodeViewReturn {
       // ═══════════════════════════════════════════════════════════════════
 
       let markerPosition = -1;
+      const source = getActiveMarkdown?.()?.replace(/\r\n/g, '\n');
 
       if (editor) {
         const { from } = editor.state.selection;
 
-        codeContent.value = htmlToMarkdown(editor.getHTML());
+        codeContent.value = source ?? htmlToMarkdown(editor.getHTML());
 
         try {
           const $pos = editor.state.doc.resolve(from);
@@ -698,7 +699,7 @@ export function useCodeView(options: UseCodeViewOptions): UseCodeViewReturn {
         }
       } else {
         const html = getActiveContent();
-        codeContent.value = htmlToMarkdown(html);
+        codeContent.value = source ?? htmlToMarkdown(html);
       }
 
       codeContentSnapshot = codeContent.value;

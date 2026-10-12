@@ -1,6 +1,7 @@
 import type { Ref } from 'vue';
 import type { Tab } from './useTabs';
 import { htmlToMarkdown } from '../utils/markdown-converter';
+import { getDocumentSource } from '../utils/save-state';
 
 export interface UseTabSerializerOptions {
   activeTabId: Readonly<Ref<string>>;
@@ -27,7 +28,7 @@ export function useTabSerializer(options: UseTabSerializerOptions): UseTabSerial
   } = options;
 
   const getTabMarkdown = (paneId: string, tab: Tab): string | null => {
-    if (tab.markdown !== undefined) return tab.markdown;
+    if (tab.markdown !== undefined) return getDocumentSource(tab);
     const isActive = tab.id === activeTabId.value && paneId === activePaneId.value;
     if (isActive) {
       const source = getEditorSource(paneId);

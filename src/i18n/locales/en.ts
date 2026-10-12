@@ -218,6 +218,7 @@ const en: Translations = {
   mermaidCustomFormatHelp: 'Define an arbitrary delimiter pair. Type exactly the characters that start the open line (e.g. <<<mermaid) and the close line (e.g. >>>). Once both fields are filled the format shows up in the dropdown and the read list. The Standard format (```mermaid) is always recognised regardless of this setting.',
   spellcheck: 'Spellcheck',
   showLineNumbers: 'Line numbers',
+  visualLineNumbers: 'Visual rows (V), not Markdown source line numbers. Use Code view for source lines.',
   expandTabs: 'Expand tabs to fit name',
   appearance: 'Appearance',
   editor: 'Editor',

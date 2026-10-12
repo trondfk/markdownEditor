@@ -216,6 +216,7 @@ export interface Translations {
   mermaidCustomFormatHelp: string;
   spellcheck: string;
   showLineNumbers: string;
+  visualLineNumbers: string;
   expandTabs: string;
   appearance: string;
   editor: string;

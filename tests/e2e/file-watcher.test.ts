@@ -40,7 +40,7 @@ test.describe('File Watcher — silent reload (no local changes)', () => {
 
     await saveAs(page, savedPath);
 
-    expect(mocks.getFs()[savedPath]).toBe(SAMPLE_MD.trimEnd());
+    expect(mocks.getFs()[savedPath]).toBe(SAMPLE_MD);
     expect(mocks.getFs()[SAMPLE_PATH]).toBe(SAMPLE_MD);
     await expect(page.locator('.tab.active .tab-unsaved')).not.toBeVisible();
     const savedTab = page.locator('.tab-bar .tab').filter({ hasText: 'loaded-source.md' });
@@ -70,7 +70,7 @@ test.describe('File Watcher — silent reload (no local changes)', () => {
     await expect(page.locator('.tab.active .tab-unsaved')).not.toBeVisible();
     await expect(page.locator('.conflict-panel')).not.toBeVisible();
     await saveAs(page, savedPath);
-    expect(mocks.getFs()[savedPath]).toBe(secondUpdate.trimEnd());
+    expect(mocks.getFs()[savedPath]).toBe(secondUpdate);
     expect(mocks.getFs()[SAMPLE_PATH]).toBe(secondUpdate);
   });
 

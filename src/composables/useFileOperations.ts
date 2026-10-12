@@ -230,14 +230,14 @@ export function useFileOperations(options: UseFileOperationsOptions): UseFileOpe
       return null;
     }
 
-    let markdown = source.trimEnd();
+    let markdown = source;
 
     // Preserve original line endings if we have the original content
-    if (tab.originalMarkdown) {
+    if (tab.originalMarkdown && markdown !== tab.originalMarkdown) {
       const originalLineEnding = detectLineEnding(tab.originalMarkdown);
       markdown = applyLineEnding(markdown, originalLineEnding);
     }
-    return { state: captureSaveSnapshot(tab, markdown), markdown: markdown.trimEnd() };
+    return { state: captureSaveSnapshot(tab, markdown), markdown: markdown === tab.originalMarkdown ? markdown : markdown.trimEnd() };
   };
 
   const writeAndUpdateTab = async (filePath: string, prepared: NonNullable<ReturnType<typeof prepareSave>>): Promise<boolean> => {

@@ -37,6 +37,19 @@ const setup = (
 };
 
 describe('useTabSerializer', () => {
+  it('returns the original source including consecutive blank lines and trailing CRLF for an unchanged document', () => {
+    const source = '\r\n# Title\r\n\r\n\r\n\r\nBody\r\n\r\n';
+    const tab = makeTab({ originalMarkdown: source, markdown: source.replace(/\r\n/g, '\n').trimEnd(), hasChanges: false });
+    const { getTabMarkdown } = setup();
+    expect(getTabMarkdown('left', tab)).toBe(source);
+    expect(tab.hasChanges).toBe(false);
+  });
+
+  it('never restores original whitespace over newer authoritative edits', () => {
+    const tab = makeTab({ originalMarkdown: 'Title\n\n\nBody\n', markdown: 'Title\n\nEdited body', hasChanges: true });
+    expect(setup().getTabMarkdown('left', tab)).toBe('Title\n\nEdited body');
+  });
+
   describe('close-save source ownership', () => {
     it('prefers the pinned document Markdown while another editor is still mounted', () => {
       const { getTabMarkdown } = setup({ getMountedEditorHtml: () => '<p>Other document</p>' });

@@ -281,7 +281,8 @@ const createDocument = async (kind: 'plain' | 'marp') => {
   if (splitEditorActive.value && activeTab.value) {
     // eslint-disable-next-line @typescript-eslint/no-use-before-define
     activeTab.value.content = exitSplitEditor();
-    setDocumentMarkdown(activeTab.value, htmlToMarkdown(activeTab.value.content));
+    // eslint-disable-next-line @typescript-eslint/no-use-before-define
+    setDocumentMarkdown(activeTab.value, splitMarkdownSource.value);
   }
   if (kind === 'marp') {
     createNewTab(null, markdownToHtml(buildMarpSeed()));
@@ -845,6 +846,7 @@ const {
   seedCodeContent,
 } = useCodeView({
   getActiveContent: () => activeTab.value?.content || '<p></p>',
+  getActiveMarkdown: () => activeTab.value ? getTabMarkdown(activePaneId.value, activeTab.value) : null,
   setActiveContent: (content: string) => {
     if (activeTab.value) {
       activeTab.value.content = content;
@@ -960,7 +962,8 @@ const splitPreviewLatestHtml = ref('');
 const splitSourceTabId = ref<string | null>(null);
 
 const enterSplitEditor = (html: string): void => {
-  enterSplitEditorRaw(html);
+  const source = activeTab.value ? getTabMarkdown(activePaneId.value, activeTab.value) : null;
+  enterSplitEditorRaw(html, source ?? undefined);
   splitSourceTabId.value = activeTabId.value;
 };
 
@@ -1008,7 +1011,7 @@ watch(activeTabId, (_newId, oldId) => {
   }
 
   if (codeView.value) {
-    seedCodeContent(htmlToMarkdown(tab?.content || '<p></p>'));
+    seedCodeContent(tab ? getTabMarkdown(activePaneId.value, tab) ?? htmlToMarkdown(tab.content) : '');
   }
 });
 
@@ -1036,7 +1039,7 @@ const toggleSplitEditor = async () => {
   const html = exitSplitEditor();
   if (activeTab.value) {
     activeTab.value.content = html;
-    setDocumentMarkdown(activeTab.value, htmlToMarkdown(activeTab.value.content));
+    setDocumentMarkdown(activeTab.value, splitMarkdownSource.value);
   }
   isLoadingContent.value = true;
   splitEditorActive.value = false;
@@ -1183,7 +1186,7 @@ const switchToTabFromSplitEditor = async (tabId: string) => {
 const closeTabFromSplitEditor = async (tabId: string) => {
   if (tabId === activeTabId.value && activeTab.value && splitSourceTabId.value === tabId) {
     activeTab.value.content = exitSplitEditor();
-    setDocumentMarkdown(activeTab.value, htmlToMarkdown(activeTab.value.content));
+    setDocumentMarkdown(activeTab.value, splitMarkdownSource.value);
   }
   handleCloseTabRequest(activePaneId.value, tabId);
   await nextTick();

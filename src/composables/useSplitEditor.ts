@@ -44,7 +44,7 @@ export interface UseSplitEditorReturn {
   /** Fraction of the pane row taken by the code side (0.2-0.8). */
   splitEditorRatio: Ref<number>;
   setSplitEditorRatio: (ratio: number) => void;
-  enter: (html: string) => void;
+  enter: (html: string, markdown?: string) => void;
   exit: () => string;
   onMarkdownInput: (value: string) => void;
   syncFromVisual: (html: string) => void;
@@ -57,8 +57,8 @@ export function useSplitEditor(): UseSplitEditorReturn {
 
   const previewHtml = computed(() => markdownToHtml(debouncedSource.value));
 
-  const enter = (html: string): void => {
-    const md = htmlToMarkdown(html);
+  const enter = (html: string, markdown?: string): void => {
+    const md = (markdown ?? htmlToMarkdown(html)).replace(/\r\n/g, '\n');
     markdownSource.value = md;
     debouncedSource.value = md;
     if (debounceTimer !== null) {

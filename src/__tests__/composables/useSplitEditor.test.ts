@@ -39,6 +39,12 @@ describe('useSplitEditor', () => {
   });
 
   describe('enter', () => {
+    it('prefers supplied source lines over HTML and uses LF positions for CodeMirror', () => {
+      const { enter, markdownSource } = useSplitEditor();
+      enter('<h1>Title</h1><p>Body</p>', '# Title\r\n\r\n\r\nBody\r\n');
+      expect(markdownSource.value).toBe('# Title\n\n\nBody\n');
+    });
+
     it('seeds markdownSource from html and computes previewHtml from it', () => {
       const { enter, markdownSource, previewHtml } = useSplitEditor();
 

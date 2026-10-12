@@ -1250,6 +1250,32 @@ describe('useFileOperations', () => {
   });
 
   describe('Save As target ownership', () => {
+    it.each(['\n# Title\n\n\nBody\n\n', '\r\n# Title\r\n\r\n\r\nBody\r\n\r\n', '# Title\r\n\n\nBody\n\r\n'])('copies unchanged source exactly on Save As (%j)', async source => {
+      const converters = await import('../../utils/markdown-converter');
+      const actual = await vi.importActual<typeof converters>('../../utils/markdown-converter');
+      const detect = vi.mocked(converters.detectLineEnding), apply = vi.mocked(converters.applyLineEnding);
+      const previousDetect = detect.getMockImplementation(), previousApply = apply.getMockImplementation();
+      detect.mockImplementation(actual.detectLineEnding);
+      apply.mockImplementation(actual.applyLineEnding);
+      try {
+        const { options, tabs } = makeOptions({ originalMarkdown: source, markdown: source.replace(/\r\n/g, '\n').trimEnd(), hasChanges: false });
+        mockFiles.set('/test/file.md', source);
+        mockReadTextFile.mockImplementation(async path => mockFiles.get(path)!);
+        mockSaveDialog.mockResolvedValueOnce('/test/copy.md');
+        const operations = useFileOperations({ ...options, getSaveMarkdown: () => source });
+        expect(await operations.saveFile()).toBe(true);
+        expect(mockWriteTextFile).not.toHaveBeenCalled();
+        await operations.saveFileAs();
+        expect(mockFiles.get('/test/copy.md')).toBe(source);
+        expect(mockFiles.get('/test/file.md')).toBe(source);
+        expect(tabs.value[0].originalMarkdown).toBe(source);
+        expect(tabs.value[0].hasChanges).toBe(false);
+      } finally {
+        detect.mockImplementation(previousDetect!);
+        apply.mockImplementation(previousApply!);
+      }
+    });
+
     it.each(['another tab', 'another pane', 'another window', 'empty source'])
       ('never writes or changes document state when the target belongs to %s', async scenario => {
         const empty = scenario === 'empty source';
