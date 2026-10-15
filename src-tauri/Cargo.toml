@@ -1,6 +1,6 @@
 [package]
 name = "mdreader"
-version = "1.0.9"
+version = "1.0.10"
 description = "Markdown editor with Mermaid support"
 authors = ["you"]
 edition = "2021"
