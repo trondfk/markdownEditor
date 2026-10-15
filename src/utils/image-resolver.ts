@@ -1,14 +1,18 @@
 import { readFile } from '@tauri-apps/plugin-fs';
 
+const isAbsoluteImagePath = (path: string): boolean =>
+  /^[a-zA-Z]:/.test(path) || path.startsWith('/') || path.startsWith('\\\\?\\');
+
 /**
  * Resolves a relative image path to an absolute file path.
  */
 function resolveToAbsolutePath(src: string, baseDir: string): string {
-  if (/^[a-zA-Z]:/.test(src) || src.startsWith('/')) {
+  if (isAbsoluteImagePath(src)) {
     return src; // Already absolute
   }
 
-  let absolutePath = `${baseDir}/${src}`.replace(/\\/g, '/');
+  const verbatim = baseDir.startsWith('\\\\?\\') ? baseDir.slice(0, 4) : '';
+  let absolutePath = `${baseDir.slice(verbatim.length)}/${src}`.replace(/\\/g, '/');
   const parts = absolutePath.split('/');
   const normalized: string[] = [];
   for (const part of parts) {
@@ -22,7 +26,7 @@ function resolveToAbsolutePath(src: string, baseDir: string): string {
   if (/^[a-zA-Z]\//.test(absolutePath)) {
     absolutePath = absolutePath.replace(/^([a-zA-Z])\//, '$1:/');
   }
-  return absolutePath;
+  return verbatim ? verbatim + absolutePath.replace(/\//g, '\\') : absolutePath;
 }
 
 /**
@@ -90,7 +94,7 @@ export async function inlineMarkdownImages(markdown: string, baseDir?: string): 
       if (replacements.has(src)) return;
       if (/^(data:|blob:|https?:)/i.test(src)) return;
 
-      const isAbsolute = /^[a-zA-Z]:/.test(src) || src.startsWith('/');
+      const isAbsolute = isAbsoluteImagePath(src);
       if (!isAbsolute && !baseDir) return;
       const absolutePath = isAbsolute ? src : resolveToAbsolutePath(src, baseDir!);
 
@@ -129,7 +133,7 @@ export async function resolveEditorImages(container: Element, baseDir?: string):
     // Skip empty src
     if (!src) return;
 
-    const isAbsolute = /^[a-zA-Z]:/.test(src) || src.startsWith('/');
+    const isAbsolute = isAbsoluteImagePath(src);
     // Skip relative paths when we don't have a baseDir
     if (!isAbsolute && !baseDir) return;
 

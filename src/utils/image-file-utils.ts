@@ -33,3 +33,9 @@ export function escapeMarkdownAlt(text: string): string {
 export function toForwardSlashes(path: string): string {
   return path.replace(/\\/g, '/');
 }
+
+/** Windows verbatim paths require backslashes, including appended components. */
+export function appendImagePath(directory: string, name: string): string {
+  const separator = directory.startsWith('\\\\?\\') ? '\\' : '/';
+  return `${directory}${separator}${name.replace(/\//g, separator)}`;
+}

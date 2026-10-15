@@ -1,7 +1,7 @@
 import { copyFile, mkdir, exists, writeFile } from '@tauri-apps/plugin-fs';
 import { appDataDir } from '@tauri-apps/api/path';
 import { getDirectoryFromFilePath } from '../utils/image-resolver';
-import { splitFilename, toForwardSlashes } from '../utils/image-file-utils';
+import { appendImagePath, splitFilename, toForwardSlashes } from '../utils/image-file-utils';
 
 const IMAGES_DIR = 'images';
 /** Where images dropped/pasted into an unsaved document are parked. */
@@ -45,11 +45,11 @@ export async function importImage(srcPath: string, docPath: string | null): Prom
     return { markdownPath: toForwardSlashes(srcPath), altText };
   }
 
-  const targetDir = `${docDir}/${IMAGES_DIR}`;
+  const targetDir = appendImagePath(docDir, IMAGES_DIR);
   await mkdir(targetDir, { recursive: true });
 
   const finalName = await resolveCollision(targetDir, stem, ext);
-  const targetPath = `${targetDir}/${finalName}`;
+  const targetPath = appendImagePath(targetDir, finalName);
 
   await copyFile(srcPath, targetPath);
 
@@ -90,10 +90,10 @@ export async function importImageBytes(
     }
   }
 
-  const targetDir = `${docDir}/${IMAGES_DIR}`;
+  const targetDir = appendImagePath(docDir, IMAGES_DIR);
   await mkdir(targetDir, { recursive: true });
   const finalName = await resolveCollision(targetDir, stem, ext);
-  const targetPath = `${targetDir}/${finalName}`;
+  const targetPath = appendImagePath(targetDir, finalName);
 
   await writeFile(targetPath, bytes);
 
@@ -112,11 +112,11 @@ function blobToDataUrl(blob: Blob): Promise<string> {
 async function resolveCollision(dir: string, stem: string, ext: string): Promise<string> {
   const suffix = ext ? `.${ext}` : '';
   const initial = `${stem}${suffix}`;
-  if (!(await exists(`${dir}/${initial}`))) return initial;
+  if (!(await exists(appendImagePath(dir, initial)))) return initial;
 
   for (let i = 1; i < 1000; i++) {
     const candidate = `${stem} (${i})${suffix}`;
-    if (!(await exists(`${dir}/${candidate}`))) return candidate;
+    if (!(await exists(appendImagePath(dir, candidate)))) return candidate;
   }
 
   return `${stem}-${Date.now()}${suffix}`;
